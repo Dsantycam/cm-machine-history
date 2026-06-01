@@ -13,7 +13,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'CMH_VERSION', '0.7.1' );
+define( 'CMH_VERSION', '0.7.2' );
 define( 'CMH_SLUG',    'cm-machine-history' );
 define( 'CMH_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'CMH_URL',     plugin_dir_url( __FILE__ ) );
@@ -33,7 +33,7 @@ CMH_Integration::init();
 // Requiere la librería en lib/plugin-update-checker/.
 // Descarga: https://github.com/YahnisElsts/plugin-update-checker/releases
 // El repositorio debe ser público para distribución sin autenticación.
-$cmh_puc = CMH_DIR . 'lib/plugin-update-checker/load-v5p5.php';
+$cmh_puc = CMH_DIR . 'lib/plugin-update-checker/load-v5p7.php';
 if ( file_exists( $cmh_puc ) ) {
     require_once $cmh_puc;
     \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
