@@ -1,0 +1,137 @@
+/* ============================================================
+   CM Machine History — Admin Styles v0.7.0
+   Author: Santiago Camacho — santiagocamachomkt.com
+   ============================================================ */
+
+/* Base */
+.cmh { max-width: 1480px; }
+.cmh h1 { margin-bottom: 14px; }
+
+/* Breadcrumbs */
+.cmh-breadcrumbs { display: flex; gap: 8px; align-items: center; margin: 8px 0 18px; color: #646970; flex-wrap: wrap; }
+.cmh-breadcrumbs a { text-decoration: none; color: #2271b1; }
+.cmh-breadcrumbs a:hover { text-decoration: underline; }
+
+/* Layout */
+.cmh-layout { display: grid; grid-template-columns: minmax(0,1fr) 360px; gap: 18px; align-items: start; }
+@media (max-width: 1050px) { .cmh-layout { grid-template-columns: 1fr; } }
+
+/* Panel */
+.cmh-panel { background: #fff; border: 1px solid #dcdcde; border-radius: 14px; padding: 20px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.cmh-panel h2 { margin: 0 0 14px; font-size: 17px; font-weight: 700; }
+.cmh-hero  { border-left: 5px solid #2271b1; }
+.cmh-panel-critical { border-left: 5px solid #d63638; background: #fff8f8; }
+.cmh-panel-critical h2 { color: #d63638; }
+
+/* KPI Grid */
+.cmh-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin: 18px 0; }
+.cmh-card { background: #fff; border: 1px solid #dcdcde; border-radius: 14px; padding: 18px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+.cmh-card span   { display: block; color: #646970; font-size: 12px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+.cmh-card strong { display: block; font-size: 24px; line-height: 1.2; font-weight: 700; }
+.cmh-card small  { display: block; margin-top: 6px; color: #646970; font-size: 12px; }
+
+/* Hero sections */
+.cmh-dashboard-hero,
+.cmh-machine-hero {
+    display: flex; justify-content: space-between; gap: 18px; align-items: center;
+    background: linear-gradient(135deg, #fff, #f6f7f7);
+    border: 1px solid #dcdcde; border-radius: 18px;
+    padding: 22px; margin: 18px 0;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+.cmh-dashboard-hero h2, .cmh-machine-hero h2 { margin: 0 0 6px; font-size: 22px; }
+.cmh-dashboard-hero p,  .cmh-machine-hero p  { margin: 0; color: #646970; }
+.cmh-kicker { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #646970; font-weight: 700; margin-bottom: 4px; }
+@media (max-width: 782px) { .cmh-dashboard-hero, .cmh-machine-hero { display: block; } .cmh-hero-actions { margin-top: 12px; } }
+
+/* Badges */
+.cmh-badge { display: inline-block; border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 700; vertical-align: middle; margin-left: 6px; background: #eef2f7; color: #1d2327; }
+.cmh-status-activa        { background: #e7f7ed; color: #0a6b32; }
+.cmh-status-mantenimiento { background: #fff7e6; color: #8a4b00; }
+.cmh-status-inactiva,
+.cmh-status-fuera_servicio { background: #fdeaea; color: #9b1c1c; }
+.cmh-badge-critical  { background: #fdeaea; color: #9b1c1c; }
+.cmh-badge-averia    { background: #fde8d8; color: #7a2000; font-size: 10px; }
+
+/* Tabs */
+.cmh-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 18px; border-bottom: 2px solid #dcdcde; padding-bottom: 0; }
+.cmh-tab {
+    background: #f6f7f7; border: 1px solid #dcdcde;
+    border-bottom: none; border-radius: 8px 8px 0 0;
+    padding: 8px 16px; text-decoration: none; color: #1d2327;
+    font-size: 13px; font-weight: 600; margin-bottom: -2px;
+    transition: background .15s, color .15s;
+}
+.cmh-tab:hover  { background: #f0f6fc; color: #2271b1; }
+.cmh-tab.active { background: #fff; border-color: #dcdcde; border-bottom-color: #fff; color: #2271b1; }
+.cmh-tab-panel  { display: none; }
+
+/* Info grid */
+.cmh-info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.cmh-info-grid div    { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; background: #fafafa; }
+.cmh-info-grid span   { display: block; color: #646970; font-size: 11px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.cmh-info-grid strong { font-size: 14px; word-break: break-word; }
+
+/* Note */
+.cmh-note { margin-top: 14px; padding: 12px 14px; border-left: 4px solid #2271b1; background: #f6f7f7; border-radius: 0 8px 8px 0; }
+
+/* Forms */
+.cmh label { display: block; font-weight: 600; margin: 12px 0 5px; font-size: 13px; }
+.cmh label em { color: #d63638; font-style: normal; }
+.cmh input:not([type="checkbox"]):not([type="file"]),
+.cmh select,
+.cmh textarea { width: 100%; max-width: 100%; box-sizing: border-box; }
+.cmh textarea { min-height: 72px; }
+.cmh .button-primary { margin-top: 14px; }
+.cmh-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.cmh-form-grid label { margin-top: 0; }
+.cmh-optional { font-weight: 400; color: #646970; font-size: 12px; }
+.cmh-tooltip  { cursor: help; color: #2271b1; font-size: 12px; }
+
+/* Warnings */
+.cmh-field-warning { background: #fff8e1; border: 1px solid #f0c040; border-radius: 6px; padding: 8px 10px; margin-top: 6px; font-size: 13px; color: #5a3e00; }
+.cmh-auto-set small { color: #2271b1; }
+
+/* Tables */
+.cmh table th { font-weight: 700; }
+.cmh-machine-table td { vertical-align: middle; }
+.cmh-machine-table .cmh-badge { margin-left: 0; }
+.cmh-table td { vertical-align: top; }
+
+/* Availability table */
+.cmh-avail-table td,
+.cmh-avail-table th { vertical-align: middle; }
+.cmh-avail-badge { display: inline-block; border-radius: 6px; padding: 3px 8px; font-weight: 700; font-size: 13px; }
+.cmh-avail-ok     { background: #e7f7ed; color: #0a6b32; }
+.cmh-avail-warn   { background: #fff7e6; color: #8a4b00; }
+.cmh-avail-danger { background: #fdeaea; color: #9b1c1c; }
+
+/* Integration logs */
+.cmh-log-error { background: #fff0f0 !important; }
+.cmh-log-ok    { background: #f0fff4 !important; }
+
+/* Timeline */
+.cmh-timeline { position: relative; }
+.cmh-timeline-item { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 10px; margin-bottom: 14px; }
+.cmh-dot { width: 12px; height: 12px; border-radius: 999px; background: #2271b1; margin-top: 18px; box-shadow: 0 0 0 4px #eaf3fb; flex-shrink: 0; }
+.cmh-timeline-card { border: 1px solid #dcdcde; border-radius: 14px; background: #fff; padding: 14px; }
+.cmh-timeline-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.cmh-timeline-head strong { font-size: 15px; }
+.cmh-timeline-head span   { color: #646970; font-size: 13px; }
+.cmh-timeline-card p { margin: .4rem 0; font-size: 13px; }
+.cmh-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.cmh-meta span { background: #f6f7f7; border: 1px solid #e5e7eb; border-radius: 999px; padding: 3px 8px; font-size: 12px; }
+.cmh-card-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; }
+.cmh-id-hint { color: #646970; font-size: 12px; }
+
+/* Mini machine list */
+.cmh-mini-list { display: grid; gap: 8px; }
+.cmh-mini-list a { display: block; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; text-decoration: none; background: #fafafa; transition: background .12s; }
+.cmh-mini-list a:hover { background: #f0f6fc; }
+.cmh-mini-list strong { display: block; font-size: 13px; }
+.cmh-mini-list span   { display: block; color: #646970; font-size: 12px; margin-top: 2px; }
+
+/* Filter bar */
+.cmh-filterbar { display: grid; grid-template-columns: minmax(240px,1fr) 200px auto auto; gap: 12px; align-items: end; }
+.cmh-filterbar label { margin: 0; }
+@media (max-width: 900px) { .cmh-filterbar { grid-template-columns: 1fr; } .cmh-filterbar .button { width: 100%; text-align: center; } }
