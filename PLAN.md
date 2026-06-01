@@ -1,6 +1,6 @@
 # CM Machine History — Plan maestro del proyecto
 
-**Versión actual:** 0.8.0  
+**Versión actual:** 0.8.4  
 **Autor:** Santiago Camacho — santiagocamachomkt.com  
 **Repositorio:** https://github.com/Dsantycam/cm-machine-history  
 **Última actualización de este documento:** 2026-06-01
@@ -50,7 +50,8 @@ cm-machine-history/
 │   └── class-cmh-admin.php         ← Toda la UI: páginas, formularios, CRUD, export CSV
 ├── assets/
 │   ├── admin.css                   ← Estilos del admin (design system con CSS variables)
-│   └── admin.js                    ← Tabs, validación horómetro, interacciones UI
+│   ├── admin.js                    ← Tabs, validación horómetro, interacciones UI
+│   └── frontend.js                 ← Autocompletado en formularios Forminator (frontend)
 └── lib/
     └── plugin-update-checker/      ← Librería PUC v5.7 (debe existir para auto-updates)
         └── load-v5p7.php           ← Entry point (versión 5.7 específicamente)
@@ -59,7 +60,7 @@ cm-machine-history/
 ### Constantes globales (definidas en cm-machine-history.php)
 
 ```php
-CMH_VERSION  // '0.8.0' — debe coincidir EXACTAMENTE en header del plugin Y en esta constante
+CMH_VERSION  // '0.8.4' — debe coincidir EXACTAMENTE en header del plugin Y en esta constante
 CMH_SLUG     // 'cm-machine-history'
 CMH_DIR      // ruta absoluta del directorio del plugin (con trailing slash)
 CMH_URL      // URL del directorio del plugin (con trailing slash)
@@ -179,39 +180,44 @@ Tabla de auditoría de la integración Forminator/E2PDF. Cada evento del proceso
 
 ```
 Empresa (cmh_companies)
-  └── Ciudad (cmh_cities)
-        ├── Sucursal (cmh_branches) [opcional]
-        │     └── Máquina (cmh_machines, branch_id = sucursal)
-        └── Máquina sin sucursal (cmh_machines, branch_id = NULL)
+  └── Ciudad/Sucursal (cmh_cities)   ← nivel único, nombre libre ("BOGOTÁ", "BODEGA NORTE", etc.)
+        └── Máquina (cmh_machines)
               └── Intervenciones (cmh_interventions)
                     └── Archivos PDF (cmh_files)
 ```
 
-La navegación del plugin sigue exactamente esta jerarquía:
-`Empresas → [Empresa] → [Ciudad] → [Sucursal]? → [Máquina] → Hoja de vida`
+La tabla `cmh_branches` sigue existiendo en BD pero **la UI de sucursales fue eliminada** a partir de v0.8.1. El concepto de "ciudad" y "sucursal" se fusionó en un único nivel "Ciudad/Sucursal" donde el usuario escribe lo que necesite. Las máquinas existentes con `branch_id` no se ven afectadas.
+
+La navegación del plugin sigue esta jerarquía:
+`Empresas → [Empresa] → [Ciudad/Sucursal] → [Máquina] → Hoja de vida`
 
 ---
 
 ## 6. Identificador de máquinas
 
-### Formato actual (desde v0.7)
+### Formato actual (desde v0.8.1)
 ```
-EMPRESA-CIUDAD-MARCA-NNN
-Ejemplo: APC-BOG-TY-001
+EMPRESA CIUDAD MARCA No.VARIABLE
+Ejemplo: APC BOG TY No.001
 ```
-- `APC` = código de la empresa
-- `BOG` = código de la ciudad
+- `APC` = código de la empresa (mayúsculas, alfanumérico)
+- `BOG` = código de la ciudad (mayúsculas, alfanumérico)
 - `TY` = código de la marca (Toyota → TY)
-- `001` = consecutivo de 3 dígitos (se calcula contando máquinas con el mismo prefijo)
+- `No.` = texto literal fijo (N mayúscula, o minúscula, punto)
+- `001` = identificador manual ingresado por el usuario al crear la máquina (puede ser número o alfanumérico: `001`, `A1`, `LINEA2`, etc.)
 
-### Formato anterior (antes de v0.7) — YA NO SE USA
-```
-EMPRESA-CIUDAD-SUCURSAL-MARCA-NNN
-Ejemplo: APC-BOG-FAC-TY-001
-```
-Se eliminó la sucursal del código para simplificar y porque la sucursal es ahora opcional.
+**Cambios respecto al formato anterior:**
+- Separador cambiado de `-` (guión) a ` ` (espacio)
+- Consecutivo automático eliminado → ahora el usuario escribe el identificador
+- El código puede editarse posteriormente desde el tab "Editar" de la hoja de vida (valida unicidad)
 
-**IMPORTANTE:** Las máquinas existentes con el formato antiguo NO se migran. Conservan su código original para no romper PDFs ya generados ni referencias existentes. Solo las máquinas nuevas usan el formato sin sucursal.
+### Formatos históricos — ya no se usan para máquinas nuevas
+| Versión | Formato | Ejemplo |
+|---|---|---|
+| v0.7 | EMPRESA-CIUDAD-MARCA-NNN | APC-BOG-TY-001 |
+| anterior a v0.7 | EMPRESA-CIUDAD-SUCURSAL-MARCA-NNN | APC-BOG-FAC-TY-001 |
+
+**IMPORTANTE:** Las máquinas existentes NO se migran. Conservan su código original para no romper PDFs generados ni referencias existentes.
 
 ### Mapa de códigos de marca
 ```
@@ -296,7 +302,7 @@ Umbral de 70% y 3 averías definido junto al cliente en base a los datos del Exc
 215 => [
     'form_type'        => 'combustion',
     'maintenance_type' => 'preventivo',
-    'machine_field'    => 'text-14',      // ← campo donde el técnico escribe el código
+    'machine_field'    => 'text-14',       // campo código de máquina
     'hourmeter_field'  => 'number-1',
     'date_field'       => 'date-1',
     'technician_field' => 'name-2',
@@ -304,19 +310,35 @@ Umbral de 70% y 3 averías definido junto al cliente en base a los datos del Exc
     'contact_field'    => 'text-12',
     'observations_field' => 'textarea-1',
 ]
-225 => [  // Eléctricos — misma estructura que 215 ]
+225 => [ /* Eléctricos — estructura idéntica a 215 */ ]
 226 => [
-    'form_type'        => 'correctivo',
-    'maintenance_type' => 'correctivo',
-    'machine_field'    => 'text-6',       // ← distinto campo en este formulario
-    'parts_field'      => 'textarea-1',
-    'worked_hours_field' => 'number-1',
-    'services_field'   => 'textarea-2',
+    'form_type'              => 'correctivo',
+    'maintenance_type'       => 'preventivo',     // fallback si checkbox viene vacío
+    'maintenance_type_field' => 'checkbox-1',     // ← "tipo de mantenimiento"
+    'maintenance_type_map'   => [                 // orden = prioridad (correctivo primero)
+        'correctivo'  => 'averia',
+        'evaluacion'  => 'evaluacion',
+        'remision'    => 'preventivo',
+        'preventivo'  => 'preventivo',
+    ],
+    'machine_field'          => 'text-6',
+    'hourmeter_field'        => 'text-5',
+    'contact_field'          => 'text-4',
+    'worked_hours_field'     => 'number-1',
+    'downtime_hours_field'   => 'number-2',       // ← "horas detenida la máquina"
+    'parts_field'            => 'textarea-1',
+    'services_field'         => 'textarea-2',
+    'observations_field'     => 'textarea-3',
     ...
 ]
 ```
 
-**IMPORTANTE:** NO modificar los formularios Forminator. Los técnicos los usan hace mucho tiempo. El plugin se adapta al formulario, no al revés.
+**Reglas del form 226:**
+- Si `checkbox-1` contiene "correctivo" → intervención tipo `averia`, `affects_availability = 1`, `downtime_hours` desde `number-2`
+- Si contiene "preventivo", "evaluacion" o "remision" → sus tipos correspondientes
+- Si hay múltiples seleccionados y uno es "correctivo", siempre gana avería (mayor prioridad)
+
+**IMPORTANTE:** NO modificar los formularios Forminator. El plugin se adapta al formulario, no al revés.
 
 ### 8.3 Deduplicación de envíos
 
@@ -324,15 +346,26 @@ Cada envío genera una clave única: `'f' + form_id + '-' + md5(machine_code + '
 
 Esta clave se guarda en `e2pdf_entry_id` y se verifica antes de insertar. Si ya existe, se ignora el envío (evita duplicados por el doble hook de Forminator 1.37.x).
 
-### 8.4 Lógica de búsqueda de PDFs (E2PDF)
+**Fix v0.8.4:** `forminator_form_after_handle_submit` disparaba incluso en envíos fallidos (errores de validación). Ahora se verifica `$response['success'] === true` antes de procesar. `forminator_form_after_save_entry` solo dispara en éxito real, no requiere verificación adicional.
 
-E2PDF guarda sus PDFs en `uploads/e2pdf/`. El plugin escanea recursivamente esa carpeta buscando archivos `.pdf` modificados en los últimos 15 minutos. 
+### 8.4 Lógica de búsqueda y almacenamiento de PDFs (E2PDF)
 
-Si hay varios PDFs recientes, prioriza los que contienen el código de máquina en la ruta o nombre de archivo (suma 1.000.000.000 al score de mtime). El de mayor score gana.
+E2PDF guarda sus PDFs en `uploads/e2pdf/`. El plugin escanea recursivamente esa carpeta buscando archivos `.pdf` modificados en los últimos 15 minutos. Si hay varios PDFs recientes, prioriza los que contienen el código de máquina en la ruta o nombre (suma 1.000.000.000 al score de mtime).
+
+**Almacenamiento permanente (desde v0.8.1):** cuando se encuentra un PDF de E2PDF, se copia inmediatamente a `uploads/cm-machine-history/{sanitized_machine_code}/`. Se guarda la URL de la copia propia, no la de E2PDF. Si E2PDF limpia sus archivos temporales, nuestra copia persiste. Si la copia falla (permisos), se usa la URL de E2PDF como fallback.
+
+Los archivos subidos manualmente también van a `uploads/cm-machine-history/{machine_code}/`. El filtro `upload_dir` se remueve con `remove_filter()` inmediatamente después de cada upload para no afectar otras operaciones.
 
 **NO hay webhook ni integración directa con E2PDF.** El mecanismo es búsqueda por tiempo de modificación de archivo.
 
-**Futuro:** mover/copiar PDFs a carpetas por máquina: `uploads/cm-machine-history/{machine_code}/`.
+### 8.5 Autocompletado en formularios Forminator (frontend.js)
+
+Al cargar cualquier página del frontend, `frontend.js` escucha cambios en los campos de código de máquina (`text-14` para forms 215/225, `text-6` para form 226). Cuando el técnico escribe un código (mín. 3 caracteres), hace AJAX a `wp_ajax_nopriv_cmh_get_machine` y:
+- Muestra indicador verde con marca, modelo, empresa y ciudad
+- Rellena automáticamente campos cuya etiqueta contenga: "marca", "modelo", "serial", "contacto", "horómetro", "empresa", "ciudad" (comparación sin acentos, case-insensitive)
+- Rellena el `contact_field` configurado como respaldo explícito
+
+El endpoint `cmh_get_machine` es público (`nopriv`) para que funcione sin login.
 
 ---
 
@@ -366,12 +399,12 @@ Si hay varios PDFs recientes, prioriza los que contienen el código de máquina 
 
 ### `CMH_Admin` (`includes/class-cmh-admin.php`)
 - Menú de administración: Dashboard, Empresas, Buscar máquinas, Integración
-- Páginas: `page_dashboard()`, `page_companies()`, `page_company()`, `page_city()`, `page_branch()`, `page_machines()`, `page_machine()`, `page_integration()`
+- Páginas: `page_dashboard()`, `page_companies()`, `page_company()`, `page_city()`, `page_machines()`, `page_machine()`, `page_integration()`
 - Formularios: `machine_form()`, `edit_machine_form()`, `intervention_form()`, `upload_form()`
 - Tablas UI: `machines_table()`, `interventions_table()`, `intervention_cards()`, `availability_table()`, `files_table()`
-- CRUD: `save_company/city/branch/machine/intervention()`, `update_machine()`, `upload_file()`
+- CRUD: `save_company/city/machine/intervention()`, `update_machine()`, `upload_file()`, `edit_intervention()`
 - V0.8: `export_csv()` y métodos privados para cada tipo de CSV
-- AJAX: `ajax_get_machine()` — busca máquina por código o serial
+- AJAX admin: `ajax_get_machine()` (requiere `read`) y `ajax_get_machine_public()` (sin login, para frontend)
 
 ---
 
@@ -426,12 +459,40 @@ Si hay varios PDFs recientes, prioriza los que contienen el código de máquina 
 - Empty states con iconos y mensajes útiles
 - Estilos `@media print` para imprimir hoja de vida
 - **Export CSV** en todas las vistas (máquinas, intervenciones, disponibilidad, logs)
-  - Con BOM UTF-8 para compatibilidad con Excel en español
-  - Separador punto y coma (`,` no funciona bien en Excel CO con configuración de lista en `;`)
 - **Imprimir hoja de vida** — botón que llama `window.print()` con CSS de impresión limpio
-- **Estado automático al intervenir** — selector en formulario sugiere cambiar el estado de la máquina según el tipo (avería → sugiere "En mantenimiento", correctivo → sugiere "Activa"), guardado en `save_intervention()`
-- `mtype_badge()` — badges de color por tipo de mantenimiento en tablas
-- `empty_state()` — componente unificado de estados vacíos
+- **Estado automático al intervenir** — selector sugiere cambiar estado según tipo de mantenimiento
+
+### ✅ v0.8.1 — Estructura, formato de ID y correcciones
+- **Nuevo formato de código de máquina:** `EMP CIU MARCA No.VARIABLE` (espacios, N.º manual)
+  - Anterior: `APC-BOG-TY-001` → Nuevo: `APC BOG TY No.001`
+  - El usuario escribe el identificador (número o alfanumérico)
+  - Código editable desde el tab "Editar" de la hoja de vida (valida unicidad)
+- **Sucursales eliminadas de la UI** — "ciudad" y "sucursal" fusionados en un único nivel "Ciudad/Sucursal". La tabla `cmh_branches` persiste en BD pero no es accesible desde la UI
+- **Mayúsculas forzadas** — empresa, ciudad/sucursal, marca, modelo, serial y N.º se convierten automáticamente a mayúsculas (JS al escribir + PHP al guardar)
+- **Horómetro opcional** al crear máquinas (antes era requerido)
+- **Editar intervenciones** — botón "Editar" en cada tarjeta del timeline; permite corregir fecha, tipo, técnico, horas parada, costo, afecta disponibilidad y observaciones; las horas trabajadas se muestran como referencia
+- **PDFs permanentes** — al detectar un PDF de E2PDF, se copia a `uploads/cm-machine-history/{code}/` para que persista aunque E2PDF lo elimine
+- **Autocompletado frontend** — nuevo `assets/frontend.js`; cuando el técnico escribe el código en Forminator, se rellenan automáticamente: marca, modelo, serial, contacto, empresa, ciudad (por texto de etiqueta)
+- **`ajaxurl` en admin JS** — corregido: antes no se pasaba y los endpoints AJAX fallaban
+- **Fix filtro `upload_dir`** — ahora se remueve con `remove_filter()` después de cada upload
+- **URLs de archivos normalizadas** — `set_url_scheme()` al guardar; corrige inconsistencias http/https
+- **Endpoint público** `wp_ajax_nopriv_cmh_get_machine` para autocompletado sin login
+
+### ✅ v0.8.2 — Autocompletado mejorado
+- `frontend.js` ahora detecta campos por texto de etiqueta (no solo por slug configurado)
+- Rellena cualquier campo cuya etiqueta contenga: marca/brand, modelo/model, serial/serie, contacto, horómetro, empresa, ciudad/sucursal
+
+### ✅ v0.8.3 — Averías desde Forminator
+- **`checkbox-1`** conectado como campo "tipo de mantenimiento" en form 226
+- Cuando el técnico marca "correctivo" → intervención tipo `averia`, `affects_availability = 1`
+- **`number-2`** ("horas detenida la máquina") → `downtime_hours` en la intervención
+- Mapa completo: evaluación → evaluacion, remisión → preventivo, preventivo → preventivo
+- Prioridad: si hay múltiples seleccionados y uno es "correctivo", siempre gana avería
+- **Fix `flatten_submission_data`** — ahora captura campos `checkbox`, `radio` y `select` (antes se ignoraban)
+
+### ✅ v0.8.4 — Fix duplicados en error de formulario
+- `forminator_form_after_handle_submit` disparaba incluso cuando el formulario tenía errores de validación, creando intervenciones fantasma
+- Fix: verificar `$response['success'] === true` antes de procesar. Si el envío falló, no se registra nada
 
 ---
 
@@ -462,14 +523,15 @@ Si hay varios PDFs recientes, prioriza los que contienen el código de máquina 
 **Por qué:** distintas máquinas tienen distintos turnos. En el Excel del cliente: Toyota 11 tiene 480 h/mes (1 turno), Toyota 9 tiene 720 h/mes (turnos extendidos). Una base fija o calculada dinámicamente sería incorrecta.  
 **Implicación:** la disponibilidad histórica usa el valor actual de `scheduled_hours_monthly` para todos los meses. Si las horas programadas cambian, el histórico se recalcula con el nuevo valor. Para versiones futuras, podría necesitarse historial de cambios.
 
-### 11.3 Código de máquina: sucursal eliminada
-**Decisión:** formato `EMPRESA-CIUDAD-MARCA-NNN` en vez de `EMPRESA-CIUDAD-SUCURSAL-MARCA-NNN`.  
-**Por qué:** la sucursal es un agrupador físico opcional, no una parte esencial de la identidad de la máquina. Simplifica los códigos y permite máquinas en ciudades sin sucursales.  
-**Compatibilidad:** máquinas existentes conservan su código antiguo. Solo nuevas máquinas usan el nuevo formato.
+### 11.3 Código de máquina: formato con espacios y N.º manual (desde v0.8.1)
+**Decisión:** formato `EMPRESA CIUDAD MARCA No.VARIABLE` con identificador manual.  
+**Por qué:** el autoincremental (`001`, `002`...) era confuso cuando se eliminaban máquinas o se reordenaban. El usuario conoce mejor el número de su propia máquina. Los espacios son más legibles que guiones en etiquetas físicas.  
+**Compatibilidad:** máquinas existentes conservan su código. Solo nuevas máquinas usan el nuevo formato.
 
-### 11.4 Sucursal opcional
-**Decisión:** `branch_id` en `cmh_machines` es `NULL`able.  
-**Por qué:** no todas las ciudades tienen sucursales separadas. Forzar la creación de una sucursal solo para poder crear una máquina era innecesario.
+### 11.4 Sucursales eliminadas de la UI (desde v0.8.1)
+**Decisión:** el nivel "sucursal" se elimina de la interfaz. "Ciudad" se renombra a "Ciudad/Sucursal" y el usuario escribe lo que necesite.  
+**Por qué:** la jerarquía Empresa → Ciudad → Sucursal → Máquina tenía un nivel de más. En la práctica, los usuarios agrupaban máquinas por sede/bodega, no por ciudad administrativa. "Ciudad/Sucursal" como un único campo libre es más flexible y simple.  
+**BD:** la tabla `cmh_branches` y el campo `branch_id` siguen existiendo para no romper datos históricos, pero la UI no los expone.
 
 ### 11.5 Auto-update: repo público sin token
 **Decisión:** repositorio GitHub público, sin token de autenticación en el plugin.  
@@ -479,9 +541,10 @@ Si hay varios PDFs recientes, prioriza los que contienen el código de máquina 
 **Decisión:** el plugin NO cambia nada en los formularios Forminator.  
 **Por qué:** los técnicos llevan mucho tiempo usando esos formularios. Cambios en la estructura rompería el parseo de campos. El plugin se adapta a los formularios, no al revés.
 
-### 11.7 Downtime_hours en Forminator = 0 por defecto
-**Decisión:** las intervenciones creadas desde Forminator tienen `downtime_hours = 0` por defecto.  
-**Por qué:** los formularios actuales no tienen un campo específico para horas de parada. El técnico lo debe registrar manualmente editando la intervención. Este es un gap conocido que podría resolverse añadiendo el campo al formulario en el futuro, pero no está en la agenda inmediata para no cambiar el UX de los técnicos.
+### 11.7 Downtime_hours en Forminator — resuelto en v0.8.3
+**Decisión:** el campo `number-2` ("horas detenida la máquina") del form 226 se mapea a `downtime_hours`.  
+**Por qué:** el usuario agregó este campo al formulario Forminator sin cambiar el flujo visual del técnico. Es el enfoque correcto: adaptar el formulario gradualmente sin romper la UX.  
+**Para forms 215/225:** siguen sin campo de horas parada (son preventivos, no descuentan disponibilidad, por lo que no aplica).
 
 ### 11.8 No depender de APIs externas
 **Decisión:** todo es local (servidor WordPress).  
@@ -604,12 +667,14 @@ Esta taxonomía viene de la plantilla Excel del cliente (columna SISTEMA).
 
 ## 16. Detalles técnicos implícitos / no obvios
 
-### 16.1 Doble hook de Forminator
+### 16.1 Doble hook de Forminator + verificación de éxito
 El plugin registra el mismo handler en DOS hooks de Forminator:
-- `forminator_form_after_handle_submit`
-- `forminator_form_after_save_entry`
+- `forminator_form_after_handle_submit` — dispara durante el procesamiento, **incluso en envíos fallidos**
+- `forminator_form_after_save_entry` — solo dispara cuando la entrada se guardó exitosamente
 
-Esto es necesario para compatibilidad con Forminator 1.37.x que puede disparar uno u otro según la configuración. El mecanismo de deduplicación por `e2pdf_entry_id` evita que se creen intervenciones duplicadas si ambos hooks se disparan para el mismo envío.
+Para compatibilidad con Forminator 1.37.x se mantienen ambos hooks. El mecanismo de deduplicación por `e2pdf_entry_id` evita duplicados si ambos se disparan.
+
+**Fix crítico v0.8.4:** cuando el hook activo es `forminator_form_after_handle_submit`, se verifica `$response['success'] === true` antes de procesar. Si el formulario tuvo errores de validación o fallo, se retorna sin crear la intervención.
 
 ### 16.2 `maybe_upgrade()` corre en cada `admin_init`
 Es el mecanismo de migración automática. Está protegido por la comparación de versiones: `get_option('cmh_version') !== CMH_VERSION`. Solo si difieren (nueva versión instalada) se corre `activate()`. El impacto en performance es mínimo (una query a `wp_options` por request en el admin).
@@ -641,14 +706,24 @@ El CSS tiene:
 ```
 JS hace `$tabsWrapper.addClass('cmh-tabs-active')` antes de activar el primer tab. Así, sin JS, todos los paneles son visibles (progressive enhancement).
 
+### 16.9 `flatten_submission_data` captura checkbox/radio/select
+El método que extrae datos de los envíos de Forminator usaba el patrón `text|number|name|date|hidden|textarea|address|email|phone`. Se amplió a incluir `checkbox|radio|select` para poder leer el campo `checkbox-1` (tipo de mantenimiento). Sin este fix, los campos de checkbox se ignoraban silenciosamente.
+
+### 16.10 Mayúsculas: doble capa (JS + PHP)
+La clase CSS `.cmh-uppercase` en inputs activa un handler JS que convierte a mayúsculas mientras el usuario escribe (`input` event). Además, en los handlers PHP (`save_company`, `save_city`, `save_machine`, `update_machine`) se aplica `strtoupper()` antes de guardar. El PHP es la capa de seguridad real; el JS es solo UX.
+
+### 16.11 gh CLI instalado en C:\tools\gh\bin
+El GitHub CLI (`gh`) se instaló manualmente en `C:\tools\gh\bin\gh.exe` y se agregó al PATH del usuario. En nuevas sesiones de PowerShell puede ser necesario ejecutar `$env:PATH += ";C:\tools\gh\bin"` si no está disponible. La autenticación se almacena en el keyring del sistema con la cuenta `Dsantycam`.
+
 ---
 
 ## 17. Lo que falta y próximas sesiones
 
 ### Inmediato (cuando se retome)
-- Probar el plugin en WordPress real con datos reales de interventions para validar que la disponibilidad y MTTR calculan correctamente
+- Probar el plugin en WordPress real con datos reales para validar disponibilidad y MTTR
 - Verificar que la exportación CSV abre bien en Excel colombiano
 - Verificar que el botón de imprimir hoja de vida funciona en Chrome/Edge
+- Probar flujo completo de avería desde Forminator: form 226 → checkbox correctivo → horas en number-2 → aparece como avería en hoja de vida con downtime correcto
 
 ### V0.9 — Panel de técnicos
 - Nuevo rol de usuario WordPress: `cmh_technician`
