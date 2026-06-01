@@ -1,26 +1,26 @@
 /**
- * CM Machine History — admin JS
- * Tabs de hoja de vida + validación de horómetro.
+ * CM Machine History — admin JS v0.8.0
  */
 (function ($) {
     'use strict';
 
-    // -------------------------------------------------------------------------
-    // Tabs
-    // -------------------------------------------------------------------------
-    var $tabs   = $('.cmh-tab');
-    var $panels = $('.cmh-tab-panel');
+    var CMHData = (typeof CMH !== 'undefined') ? CMH : {};
+
+    // ─── Tabs ──────────────────────────────────────────────────────────────────
+    var $tabsWrapper = $('.cmh-tabs-wrapper');
+    var $tabs        = $tabsWrapper.find('.cmh-tab');
+    var $panels      = $tabsWrapper.find('.cmh-tab-panel');
 
     function activateTab(tabId) {
         $tabs.removeClass('active').filter('[data-tab="' + tabId + '"]').addClass('active');
-        $panels.hide().filter('#tab-' + tabId).show();
+        $panels.removeClass('active').filter('#tab-' + tabId).addClass('active');
     }
 
     if ($tabs.length && $panels.length) {
-        // Ocultar todos al inicio; mostrar según hash o primer tab
-        var initial = (window.location.hash || '').replace('#tab-', '').replace('#', '');
-        var firstTab = $tabs.first().data('tab');
-        activateTab(initial || firstTab);
+        $tabsWrapper.addClass('cmh-tabs-active');
+        var hash    = (window.location.hash || '').replace('#tab-', '');
+        var firstId = $tabs.first().data('tab');
+        activateTab(hash || firstId);
 
         $tabs.on('click', function (e) {
             e.preventDefault();
@@ -30,77 +30,79 @@
         });
     }
 
-    // -------------------------------------------------------------------------
-    // Validación de horómetro
-    // -------------------------------------------------------------------------
-    var lastHourmeter = (typeof CMH !== 'undefined' && CMH.lastHourmeter) ? parseFloat(CMH.lastHourmeter) : 0;
+    // ─── Horómetro — validación ────────────────────────────────────────────────
+    var lastHourmeter = parseFloat(CMHData.lastHourmeter) || 0;
 
-    function checkHourmeter($input, $warnDiv) {
+    function warnHourmeter($input, $warn, prevValue) {
         var val = parseFloat($input.val());
-        if (val > 0 && lastHourmeter > 0 && val < lastHourmeter) {
-            $warnDiv.text(
-                'Advertencia: el horómetro ingresado (' + val.toLocaleString('es-CO', {minimumFractionDigits: 2}) +
-                ' h) es menor al último registrado (' + lastHourmeter.toLocaleString('es-CO', {minimumFractionDigits: 2}) +
-                ' h). Verifica que sea correcto antes de guardar.'
+        if (val > 0 && prevValue > 0 && val < prevValue) {
+            $warn.html(
+                '<strong>Advertencia:</strong> el horómetro ingresado (<strong>' +
+                val.toFixed(2) + ' h</strong>) es menor al último registrado (<strong>' +
+                prevValue.toFixed(2) + ' h</strong>). Confirma que sea correcto antes de guardar.'
             ).show();
         } else {
-            $warnDiv.hide();
+            $warn.hide().empty();
         }
     }
 
-    // Input de intervención
     var $hmInput = $('#cmh-hourmeter-input');
     var $hmWarn  = $('#cmh-hourmeter-warn');
     if ($hmInput.length) {
         $hmInput.on('input change', function () {
-            checkHourmeter($hmInput, $hmWarn);
+            warnHourmeter($hmInput, $hmWarn, lastHourmeter);
         });
     }
 
-    // Input de edición de máquina
-    var $editHm = $('[name="current_hourmeter"][data-prev-hourmeter]');
-    if ($editHm.length) {
-        var prevHm = parseFloat($editHm.data('prev-hourmeter')) || 0;
-        $editHm.on('input change', function () {
-            var val = parseFloat($(this).val());
-            var $warn = $('#cmh-edit-hm-warn');
-            if ( !$warn.length ) {
-                $warn = $('<div id="cmh-edit-hm-warn" class="cmh-field-warning"></div>').insertAfter($editHm);
-            }
-            if (val > 0 && prevHm > 0 && val < prevHm) {
-                $warn.text(
-                    'El horómetro ingresado (' + val + ' h) es menor al anterior (' + prevHm + ' h).'
-                ).show();
-            } else {
-                $warn.hide();
-            }
+    $('[data-prev-hourmeter]').each(function () {
+        var $el   = $(this);
+        var prev  = parseFloat($el.data('prev-hourmeter')) || 0;
+        var $warn = $('<div class="cmh-field-warning" style="display:none"></div>').insertAfter($el);
+        $el.on('input change', function () {
+            warnHourmeter($el, $warn, prev);
         });
-    }
+    });
 
-    // -------------------------------------------------------------------------
-    // Auto-comportamiento del campo "afecta disponibilidad"
-    // según tipo de mantenimiento
-    // -------------------------------------------------------------------------
-    var $mtype   = $('#cmh-mtype');
-    var $avCheck = $('[name="affects_availability"]');
-    var $avLabel = $('#cmh-av-label');
-    var $dtFields = $('#cmh-downtime-fields');
+    // ─── Tipo de mantenimiento — comportamiento dinámico ───────────────────────
+    var $mtype     = $('#cmh-mtype');
+    var $avCheck   = $('[name="affects_availability"]');
+    var $avRow     = $('#cmh-av-row');
+    var $dtFields  = $('#cmh-downtime-fields');
+    var $statusRow = $('#cmh-status-row');
+
+    var statusSuggestions = {
+        averia:     'mantenimiento',
+        correctivo: 'activa',
+        preventivo: '',
+        evaluacion: ''
+    };
 
     function syncMtype() {
         var val = $mtype.val();
+
+        // Afecta disponibilidad
         if (val === 'averia') {
             $avCheck.prop('checked', true).prop('disabled', true);
-            $avLabel.addClass('cmh-auto-set');
-            $dtFields.show();
+            $avRow.find('.cmh-auto-note').show();
         } else if (val === 'preventivo' || val === 'evaluacion') {
             $avCheck.prop('checked', false).prop('disabled', true);
-            $avLabel.addClass('cmh-auto-set');
-            $dtFields.toggle(false);
+            $avRow.find('.cmh-auto-note').show();
         } else {
-            // correctivo — el usuario decide
             $avCheck.prop('disabled', false);
-            $avLabel.removeClass('cmh-auto-set');
-            $dtFields.show();
+            $avRow.find('.cmh-auto-note').hide();
+        }
+
+        // Campos de parada
+        $dtFields.toggle(val === 'averia' || val === 'correctivo');
+
+        // Sugerencia de estado
+        var suggested = statusSuggestions[val] || '';
+        if (suggested && $statusRow.length) {
+            $statusRow.show();
+            $statusRow.find('select[name="new_machine_status"]').val(suggested);
+        } else if ($statusRow.length) {
+            $statusRow.show();
+            $statusRow.find('select[name="new_machine_status"]').val('');
         }
     }
 
@@ -108,5 +110,18 @@
         $mtype.on('change', syncMtype);
         syncMtype();
     }
+
+    // ─── Máquinas — fila completa clickable ───────────────────────────────────
+    $(document).on('click', '.cmh-machine-table tbody tr', function (e) {
+        if ($(e.target).is('a, button, input')) return;
+        var $link = $(this).find('a.button');
+        if ($link.length) window.location = $link.attr('href');
+    });
+
+    // ─── Imprimir hoja de vida ─────────────────────────────────────────────────
+    $(document).on('click', '.cmh-btn-print', function (e) {
+        e.preventDefault();
+        window.print();
+    });
 
 })(jQuery);
