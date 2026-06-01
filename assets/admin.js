@@ -124,4 +124,17 @@
         window.print();
     });
 
+    // ─── Editar intervención — toggle inline ──────────────────────────────────
+    $(document).on('click', '.cmh-btn-toggle-edit', function () {
+        var target = $(this).data('target');
+        if (target) $('#' + target).slideToggle(200);
+    });
+
+    // ─── Forzar mayúsculas en campos marcados ─────────────────────────────────
+    $(document).on('input', '.cmh-uppercase', function () {
+        var pos = this.selectionStart;
+        this.value = this.value.toUpperCase();
+        if (this.setSelectionRange) this.setSelectionRange(pos, pos);
+    });
+
 })(jQuery);

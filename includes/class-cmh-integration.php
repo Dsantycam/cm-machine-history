@@ -7,9 +7,18 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class CMH_Integration {
 
     public static function init() {
-        add_action( 'forminator_form_after_handle_submit', [ __CLASS__, 'capture_submit' ], 10, 10 );
-        add_action( 'forminator_form_after_save_entry',    [ __CLASS__, 'capture_submit' ], 10, 10 );
-        add_action( 'cmh_find_e2pdf_pdf_event',            [ __CLASS__, 'find_pdf' ],       10, 3  );
+        add_action( 'forminator_form_after_handle_submit', [ __CLASS__, 'capture_submit' ],    10, 10 );
+        add_action( 'forminator_form_after_save_entry',    [ __CLASS__, 'capture_submit' ],    10, 10 );
+        add_action( 'cmh_find_e2pdf_pdf_event',            [ __CLASS__, 'find_pdf' ],          10, 3  );
+        add_action( 'wp_enqueue_scripts',                  [ __CLASS__, 'enqueue_frontend' ] );
+    }
+
+    public static function enqueue_frontend() {
+        wp_enqueue_script( 'cmh-front', CMH_URL . 'assets/frontend.js', [ 'jquery' ], CMH_VERSION, true );
+        wp_localize_script( 'cmh-front', 'CMHFront', [
+            'ajaxurl'     => admin_url( 'admin-ajax.php' ),
+            'formConfigs' => self::config(),
+        ] );
     }
 
     // -------------------------------------------------------------------------
@@ -196,14 +205,32 @@ class CMH_Integration {
             return;
         }
 
-        $rel = str_replace( $upload['basedir'], '', $candidate );
-        $url = trailingslashit( $upload['baseurl'] ) . ltrim( str_replace( DIRECTORY_SEPARATOR, '/', $rel ), '/' );
+        // Copiar el PDF a nuestro propio directorio para que persista aunque E2PDF lo elimine
+        $safe_code  = sanitize_file_name( $machine_code );
+        $our_dir    = $upload['basedir'] . '/cm-machine-history/' . $safe_code;
+        $our_url    = $upload['baseurl'] . '/cm-machine-history/' . $safe_code;
+        $store_path = $candidate;
+        $store_url  = '';
+
+        if ( ! is_dir( $our_dir ) ) wp_mkdir_p( $our_dir );
+        if ( is_dir( $our_dir ) ) {
+            $dst = $our_dir . '/' . basename( $candidate );
+            if ( ! file_exists( $dst ) && copy( $candidate, $dst ) ) {
+                $store_path = $dst;
+                $store_url  = esc_url_raw( set_url_scheme( $our_url . '/' . basename( $candidate ) ) );
+            }
+        }
+
+        if ( ! $store_url ) {
+            $rel       = str_replace( $upload['basedir'], '', $candidate );
+            $store_url = esc_url_raw( set_url_scheme( trailingslashit( $upload['baseurl'] ) . ltrim( str_replace( DIRECTORY_SEPARATOR, '/', $rel ), '/' ) ) );
+        }
 
         $wpdb->insert( $t['files'], [
             'machine_id'      => (int) $machine_id,
             'intervention_id' => (int) $intervention_id,
-            'file_url'        => esc_url_raw( $url ),
-            'file_path'       => $candidate,
+            'file_url'        => $store_url,
+            'file_path'       => $store_path,
             'file_name'       => basename( $candidate ),
             'file_type'       => 'application/pdf',
             'uploaded_by'     => 0,

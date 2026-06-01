@@ -18,10 +18,12 @@ class CMH_Admin {
         foreach ( [ 'company', 'city', 'branch', 'machine', 'intervention' ] as $type ) {
             add_action( 'admin_post_cm_save_' . $type, [ __CLASS__, 'save_' . $type ] );
         }
-        add_action( 'admin_post_cm_upload_file',    [ __CLASS__, 'upload_file' ] );
-        add_action( 'admin_post_cm_update_machine', [ __CLASS__, 'update_machine' ] );
-        add_action( 'admin_post_cm_export_csv',     [ __CLASS__, 'export_csv' ] );
-        add_action( 'wp_ajax_cmh_get_machine',      [ __CLASS__, 'ajax_get_machine' ] );
+        add_action( 'admin_post_cm_upload_file',       [ __CLASS__, 'upload_file' ] );
+        add_action( 'admin_post_cm_update_machine',    [ __CLASS__, 'update_machine' ] );
+        add_action( 'admin_post_cm_export_csv',        [ __CLASS__, 'export_csv' ] );
+        add_action( 'admin_post_cm_edit_intervention', [ __CLASS__, 'edit_intervention' ] );
+        add_action( 'wp_ajax_cmh_get_machine',         [ __CLASS__, 'ajax_get_machine' ] );
+        add_action( 'wp_ajax_nopriv_cmh_get_machine',  [ __CLASS__, 'ajax_get_machine_public' ] );
     }
 
     public static function admin_menu() {
@@ -37,6 +39,16 @@ class CMH_Admin {
         if ( strpos( $hook, CMH_SLUG ) === false ) return;
         wp_enqueue_style(  'cmh-admin', CMH_URL . 'assets/admin.css', [],          CMH_VERSION );
         wp_enqueue_script( 'cmh-admin', CMH_URL . 'assets/admin.js',  [ 'jquery' ], CMH_VERSION, true );
+
+        $data = [ 'ajaxurl' => admin_url( 'admin-ajax.php' ), 'lastHourmeter' => 0 ];
+        $mid  = intval( $_GET['machine_id'] ?? 0 );
+        if ( $mid ) {
+            global $wpdb; $t = CMH_Core::tables();
+            $data['lastHourmeter'] = (float) $wpdb->get_var( $wpdb->prepare(
+                "SELECT current_hourmeter FROM {$t['machines']} WHERE id=%d", $mid
+            ) );
+        }
+        wp_localize_script( 'cmh-admin', 'CMH', $data );
     }
 
     // =========================================================================
@@ -245,9 +257,9 @@ class CMH_Admin {
         echo '<div class="cmh-side"><div class="cmh-panel"><h2>Nueva empresa</h2>';
         self::form_start( 'cm_save_company' );
         echo '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies' ) ) . '">'
-            . '<label>Nombre <em>*</em></label><input name="name" required>'
-            . '<label>Código corto <em>*</em></label><input name="code" placeholder="APC" maxlength="10" required>'
-            . '<p style="font-size:12px;color:#646970;margin:6px 0">Se usará en el código: <strong>APC-BOG-TY-001</strong></p>'
+            . '<label>Nombre <em>*</em></label><input name="name" required class="cmh-uppercase">'
+            . '<label>Código corto <em>*</em></label><input name="code" placeholder="APC" maxlength="10" required class="cmh-uppercase">'
+            . '<p style="font-size:12px;color:#646970;margin:6px 0">Se usará en el código: <strong>APC BOG TY No.001</strong></p>'
             . '<button class="button button-primary">Guardar empresa</button></form>';
         echo '</div></div></div>';
         self::page_footer();
@@ -276,29 +288,29 @@ class CMH_Admin {
             . '</div><a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'company_id' => $company_id ] ) ) . '">Exportar máquinas (CSV)</a>'
             . '</div>';
 
-        echo '<div class="cmh-layout"><div class="cmh-main"><div class="cmh-panel"><h2>Ciudades</h2>'
-            . '<table class="widefat cmh"><thead><tr><th>Ciudad</th><th>Código</th><th>Sucursales</th><th>Máquinas</th><th></th></tr></thead><tbody>';
+        echo '<div class="cmh-layout"><div class="cmh-main"><div class="cmh-panel"><h2>Ciudades / Sucursales</h2>'
+            . '<table class="widefat cmh"><thead><tr><th>Ciudad/Sucursal</th><th>Código</th><th>Máquinas</th><th></th></tr></thead><tbody>';
 
         $rows = $wpdb->get_results( $wpdb->prepare(
-            "SELECT ci.*, (SELECT COUNT(*) FROM {$t['branches']} b WHERE b.city_id=ci.id) branches, (SELECT COUNT(*) FROM {$t['machines']} m WHERE m.city_id=ci.id) machines FROM {$t['cities']} ci WHERE ci.company_id=%d ORDER BY ci.name",
+            "SELECT ci.*, (SELECT COUNT(*) FROM {$t['machines']} m WHERE m.city_id=ci.id) machines FROM {$t['cities']} ci WHERE ci.company_id=%d ORDER BY ci.name",
             $company_id
         ) );
         foreach ( $rows as $r ) {
             echo '<tr><td><strong>' . esc_html( $r->name ) . '</strong></td>'
                 . '<td><code>' . esc_html( $r->code ) . '</code></td>'
-                . '<td>' . intval( $r->branches ) . '</td><td>' . intval( $r->machines ) . '</td>'
+                . '<td>' . intval( $r->machines ) . '</td>'
                 . '<td><a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $r->id ] ) ) . '">Entrar</a></td></tr>';
         }
-        if ( ! $rows ) echo '<tr><td colspan="5">' . self::empty_state_inline( 'Sin ciudades aún.' ) . '</td></tr>';
+        if ( ! $rows ) echo '<tr><td colspan="4">' . self::empty_state_inline( 'Sin ciudades/sucursales aún.' ) . '</td></tr>';
         echo '</tbody></table></div></div>';
 
-        echo '<div class="cmh-side"><div class="cmh-panel"><h2>Nueva ciudad</h2>';
+        echo '<div class="cmh-side"><div class="cmh-panel"><h2>Nueva ciudad/sucursal</h2>';
         self::form_start( 'cm_save_city' );
         echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ) ) . '">'
-            . '<label>Ciudad <em>*</em></label><input name="name" placeholder="Bogotá" required>'
-            . '<label>Código <em>*</em></label><input name="code" placeholder="BOG" maxlength="10" required>'
-            . '<button class="button button-primary">Guardar ciudad</button></form>';
+            . '<label>Nombre <em>*</em></label><input name="name" placeholder="BOGOTÁ" required class="cmh-uppercase">'
+            . '<label>Código <em>*</em></label><input name="code" placeholder="BOG" maxlength="10" required class="cmh-uppercase">'
+            . '<button class="button button-primary">Guardar</button></form>';
         echo '</div></div></div>';
         self::page_footer();
     }
@@ -309,7 +321,7 @@ class CMH_Admin {
             "SELECT ci.*, c.name company_name, c.id company_id FROM {$t['cities']} ci JOIN {$t['companies']} c ON c.id=ci.company_id WHERE ci.id=%d",
             $city_id
         ) );
-        if ( ! $city ) wp_die( 'Ciudad no encontrada.' );
+        if ( ! $city ) wp_die( 'Ciudad/Sucursal no encontrada.' );
 
         self::page_header( $city->name, [
             [ 'label' => 'Empresas',          'url' => self::admin_url( CMH_SLUG . '-companies' ) ],
@@ -318,22 +330,6 @@ class CMH_Admin {
         ] );
 
         echo '<div class="cmh-layout"><div class="cmh-main">';
-
-        $branches = $wpdb->get_results( $wpdb->prepare(
-            "SELECT b.*, (SELECT COUNT(*) FROM {$t['machines']} m WHERE m.branch_id=b.id) machines FROM {$t['branches']} b WHERE b.city_id=%d ORDER BY b.name",
-            $city_id
-        ) );
-        if ( $branches ) {
-            echo '<div class="cmh-panel"><h2>Sucursales</h2>'
-                . '<table class="widefat cmh"><thead><tr><th>Sucursal</th><th>Código</th><th>Dirección</th><th>Máquinas</th><th></th></tr></thead><tbody>';
-            foreach ( $branches as $b ) {
-                echo '<tr><td><strong>' . esc_html( $b->name ) . '</strong></td><td><code>' . esc_html( $b->code ) . '</code></td>'
-                    . '<td>' . esc_html( $b->address ?: '—' ) . '</td><td>' . intval( $b->machines ) . '</td>'
-                    . '<td><a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'branch_id' => $b->id ] ) ) . '">Entrar</a></td></tr>';
-            }
-            echo '</tbody></table></div>';
-        }
-
         echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Máquinas en ' . esc_html( $city->name ) . '</h2>'
             . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'city_id' => $city_id ] ) ) . '">Exportar CSV</a></div>';
         self::machines_table( $city_id, 0 );
@@ -341,15 +337,6 @@ class CMH_Admin {
 
         echo '<div class="cmh-side"><div class="cmh-panel"><h2>Agregar máquina</h2>';
         self::machine_form( $city->company_id, $city_id );
-        echo '</div><div class="cmh-panel"><h2>Nueva sucursal</h2>';
-        self::form_start( 'cm_save_branch' );
-        echo '<input type="hidden" name="company_id" value="' . intval( $city->company_id ) . '">'
-            . '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
-            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] ) ) . '">'
-            . '<label>Nombre <em>*</em></label><input name="name" required>'
-            . '<label>Código <em>*</em></label><input name="code" placeholder="FAC" maxlength="10" required>'
-            . '<label>Dirección</label><textarea name="address"></textarea>'
-            . '<button class="button button-primary">Guardar sucursal</button></form>';
         echo '</div></div></div>';
         self::page_footer();
     }
@@ -466,8 +453,6 @@ class CMH_Admin {
         self::metric_card( 'Costo total',       '$' . number_format( (float)$stats->cost, 0, ',', '.' ),              'historial',         'blue' );
         self::metric_card( 'Horómetro',         number_format( (float)$m->current_hourmeter, 2, ',', '.' ) . ' h',   'actual',            'blue' );
         echo '</div>';
-
-        wp_localize_script( 'cmh-admin', 'CMH', [ 'lastHourmeter' => (float) $m->current_hourmeter ] );
 
         // Tabs
         echo '<div class="cmh-tabs-wrapper">'
@@ -604,31 +589,26 @@ class CMH_Admin {
 
     public static function machine_form( $company_id, $city_id, $branch_id = 0 ) {
         global $wpdb; $t = CMH_Core::tables();
-        $branches = $wpdb->get_results( $wpdb->prepare( "SELECT id, name FROM {$t['branches']} WHERE city_id=%d ORDER BY name", $city_id ) );
-        $redirect = $branch_id
-            ? self::admin_url( CMH_SLUG . '-companies', [ 'branch_id' => $branch_id ] )
-            : self::admin_url( CMH_SLUG . '-companies', [ 'city_id'   => $city_id   ] );
+        $company  = $wpdb->get_row( $wpdb->prepare( "SELECT code FROM {$t['companies']} WHERE id=%d", $company_id ) );
+        $city     = $wpdb->get_row( $wpdb->prepare( "SELECT code FROM {$t['cities']}    WHERE id=%d", $city_id ) );
+        $redirect = self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] );
+        $example  = ( $company && $city ) ? $company->code . ' ' . $city->code . ' TY No.001' : 'EMP CIU TY No.001';
 
         self::form_start( 'cm_save_machine' );
         echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
-            . '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
+            . '<input type="hidden" name="city_id"    value="' . intval( $city_id )    . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( $redirect ) . '">';
 
-        if ( $branch_id ) {
-            echo '<input type="hidden" name="branch_id" value="' . intval( $branch_id ) . '">';
-        } elseif ( $branches ) {
-            echo '<label>Sucursal <span class="cmh-optional">(opcional)</span></label>'
-                . '<select name="branch_id"><option value="">— Sin sucursal —</option>';
-            foreach ( $branches as $b ) echo '<option value="' . intval( $b->id ) . '">' . esc_html( $b->name ) . '</option>';
-            echo '</select>';
-        }
+        echo '<label>N.º de máquina <em>*</em> <span class="cmh-tooltip" title="Número o código alfanumérico que identifica la máquina. Se construye el código: ' . esc_attr( $example ) . '">[?]</span></label>'
+            . '<input name="machine_number" placeholder="001" required class="cmh-uppercase">'
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Código resultante: <strong>' . esc_html( $example ) . '</strong></p>';
 
         echo '<div class="cmh-form-grid">'
-            . '<label>Marca <em>*</em><input name="brand" placeholder="Toyota" required></label>'
-            . '<label>Modelo<input name="model" placeholder="8FGU25"></label>'
-            . '<label>Serial<input name="serial"></label>'
+            . '<label>Marca <em>*</em><input name="brand" placeholder="TOYOTA" required class="cmh-uppercase"></label>'
+            . '<label>Modelo<input name="model" placeholder="8FGU25" class="cmh-uppercase"></label>'
+            . '<label>Serial<input name="serial" class="cmh-uppercase"></label>'
             . '<label>Contacto<input name="contact"></label>'
-            . '<label>Horómetro actual<input type="number" step="0.01" name="current_hourmeter" value="0" min="0"></label>'
+            . '<label>Horómetro <span class="cmh-optional">(opcional)</span><input type="number" step="0.01" name="current_hourmeter" value="" min="0" placeholder="0"></label>'
             . '<label>H. programadas / mes <span class="cmh-tooltip" title="Horas de turno mensual. Base del cálculo de disponibilidad.">[?]</span>'
             . '<input type="number" step="1" name="scheduled_hours_monthly" value="480" min="1" required></label>'
             . '</div>'
@@ -638,30 +618,26 @@ class CMH_Admin {
     }
 
     public static function edit_machine_form( $m ) {
-        global $wpdb; $t = CMH_Core::tables();
-        $branches = $wpdb->get_results( $wpdb->prepare( "SELECT id, name FROM {$t['branches']} WHERE city_id=%d ORDER BY name", $m->city_id ) );
-
         self::form_start( 'cm_update_machine' );
         echo '<input type="hidden" name="machine_id" value="' . intval( $m->id ) . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $m->id ] ) ) . '">';
 
+        echo '<label>Código de máquina</label>'
+            . '<input name="machine_code" value="' . esc_attr( $m->machine_code ) . '" class="cmh-uppercase">'
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Modifica solo si es necesario corregir el código. Debe ser único.</p>';
+
         echo '<div class="cmh-form-grid">'
-            . '<label>Marca <em>*</em><input name="brand" value="' . esc_attr( $m->brand ) . '" required></label>'
-            . '<label>Modelo<input name="model" value="' . esc_attr( $m->model ) . '"></label>'
-            . '<label>Serial<input name="serial" value="' . esc_attr( $m->serial ) . '"></label>'
+            . '<label>Marca <em>*</em><input name="brand" value="' . esc_attr( $m->brand ) . '" required class="cmh-uppercase"></label>'
+            . '<label>Modelo<input name="model" value="' . esc_attr( $m->model ) . '" class="cmh-uppercase"></label>'
+            . '<label>Serial<input name="serial" value="' . esc_attr( $m->serial ) . '" class="cmh-uppercase"></label>'
             . '<label>Contacto<input name="contact" value="' . esc_attr( $m->contact ) . '"></label>'
             . '<label>Horómetro actual<input type="number" step="0.01" name="current_hourmeter" value="' . esc_attr( $m->current_hourmeter ) . '" data-prev-hourmeter="' . esc_attr( $m->current_hourmeter ) . '"></label>'
             . '<label>H. programadas / mes<input type="number" step="1" name="scheduled_hours_monthly" value="' . esc_attr( $m->scheduled_hours_monthly ) . '" min="1" required></label>'
             . '</div><label>Estado<select name="status">';
         foreach ( [ 'activa' => 'Activa', 'mantenimiento' => 'En mantenimiento', 'inactiva' => 'Inactiva', 'fuera_servicio' => 'Fuera de servicio' ] as $k => $v )
             echo '<option value="' . esc_attr( $k ) . '" ' . selected( $m->status, $k, false ) . '>' . esc_html( $v ) . '</option>';
-        echo '</select></label>';
-        if ( $branches ) {
-            echo '<label>Sucursal <span class="cmh-optional">(opcional)</span><select name="branch_id"><option value="">— Sin sucursal —</option>';
-            foreach ( $branches as $b ) echo '<option value="' . intval( $b->id ) . '" ' . selected( $m->branch_id, $b->id, false ) . '>' . esc_html( $b->name ) . '</option>';
-            echo '</select></label>';
-        }
-        echo '<label>Notas<textarea name="notes">' . esc_textarea( $m->notes ) . '</textarea></label>'
+        echo '</select></label>'
+            . '<label>Notas<textarea name="notes">' . esc_textarea( $m->notes ) . '</textarea></label>'
             . '<button class="button button-primary">Guardar cambios</button></form>';
     }
 
@@ -731,7 +707,31 @@ class CMH_Admin {
             if ( $r->observations ) echo '<p><strong>Observaciones:</strong> ' . esc_html( wp_trim_words( $r->observations, 32 ) ) . '</p>';
             echo '<div class="cmh-card-actions">';
             if ( $r->file_url ) echo '<a class="button button-small" target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>';
-            echo '<span class="cmh-id-hint">ID #' . intval( $r->id ) . '</span></div></div></div>';
+            echo '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-edit-' . intval( $r->id ) . '">Editar</button>';
+            echo '<span class="cmh-id-hint">ID #' . intval( $r->id ) . '</span></div>';
+
+            // ── Formulario inline de edición ──────────────────────────────────
+            echo '<div id="cmh-edit-' . intval( $r->id ) . '" class="cmh-edit-form" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08)">';
+            self::form_start( 'cm_edit_intervention' );
+            echo '<input type="hidden" name="intervention_id" value="' . intval( $r->id ) . '">';
+            echo '<div class="cmh-form-grid">'
+                . '<label>Fecha<input type="date" name="intervention_date" value="' . esc_attr( $r->intervention_date ) . '"></label>'
+                . '<label>Tipo<select name="maintenance_type">';
+            foreach ( [ 'preventivo' => 'Preventivo', 'correctivo' => 'Correctivo', 'averia' => 'Avería', 'evaluacion' => 'Evaluación' ] as $k => $v )
+                echo '<option value="' . esc_attr( $k ) . '" ' . selected( $r->maintenance_type, $k, false ) . '>' . esc_html( $v ) . '</option>';
+            echo '</select></label>'
+                . '<label>Técnico<input name="technician" value="' . esc_attr( $r->technician ) . '"></label>'
+                . '<label>Horas parada' . ( $r->worked_hours > 0 ? ' <small style="color:#646970">(H. trabajadas: ' . esc_html( $r->worked_hours ) . ' h)</small>' : '' ) . '<input type="number" step="0.01" name="downtime_hours" value="' . esc_attr( $r->downtime_hours ) . '" min="0" placeholder="' . esc_attr( $r->worked_hours > 0 ? $r->worked_hours : '0' ) . '"></label>'
+                . '<label>Costo<input type="number" step="100" name="cost" value="' . esc_attr( $r->cost ) . '" min="0"></label>'
+                . '</div>'
+                . '<label><input type="checkbox" name="affects_availability" value="1" ' . checked( $r->affects_availability, 1, false ) . '> Afecta disponibilidad</label>'
+                . '<label style="display:block;margin-top:8px">Observaciones<textarea name="observations">' . esc_textarea( $r->observations ) . '</textarea></label>'
+                . '<div style="margin-top:8px;display:flex;gap:8px">'
+                . '<button class="button button-primary button-small">Guardar</button>'
+                . '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-edit-' . intval( $r->id ) . '">Cancelar</button>'
+                . '</div></form></div>';
+
+            echo '</div></div>'; // close .cmh-timeline-card, .cmh-timeline-item
         }
         echo '</div>';
     }
@@ -881,15 +881,15 @@ class CMH_Admin {
 
     public static function save_company() {
         self::check(); global $wpdb; $t = CMH_Core::tables();
-        $wpdb->insert( $t['companies'], [ 'name' => sanitize_text_field( $_POST['name'] ), 'code' => self::clean_code( $_POST['code'] ) ] );
+        $wpdb->insert( $t['companies'], [ 'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ), 'code' => self::clean_code( $_POST['code'] ) ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-companies' ), 'Empresa guardada.' );
     }
 
     public static function save_city() {
         self::check(); global $wpdb; $t = CMH_Core::tables();
         $cid = intval( $_POST['company_id'] );
-        $wpdb->insert( $t['cities'], [ 'company_id' => $cid, 'name' => sanitize_text_field( $_POST['name'] ), 'code' => self::clean_code( $_POST['code'] ) ] );
-        self::redirect_to( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $cid ] ), 'Ciudad guardada.' );
+        $wpdb->insert( $t['cities'], [ 'company_id' => $cid, 'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ), 'code' => self::clean_code( $_POST['code'] ) ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $cid ] ), 'Ciudad/Sucursal guardada.' );
     }
 
     public static function save_branch() {
@@ -905,26 +905,44 @@ class CMH_Admin {
         $city    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['cities']}    WHERE id=%d", $_POST['city_id'] ) );
         if ( ! $company || ! $city ) wp_die( 'Empresa o ciudad no encontrada.' );
 
-        $brand_code   = self::brand_code( $_POST['brand'] );
-        $prefix       = $company->code . '-' . $city->code . '-' . $brand_code;
-        $count        = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$t['machines']} WHERE machine_code LIKE %s", $wpdb->esc_like( $prefix ) . '-%' ) );
-        $machine_code = $prefix . '-' . str_pad( $count + 1, 3, '0', STR_PAD_LEFT );
-        $branch_id    = ! empty( $_POST['branch_id'] ) ? intval( $_POST['branch_id'] ) : null;
+        $brand       = strtoupper( sanitize_text_field( $_POST['brand'] ) );
+        $brand_code  = self::brand_code( $brand );
+        $machine_num = strtoupper( preg_replace( '/[^A-Z0-9]/', '', strtoupper( sanitize_text_field( $_POST['machine_number'] ?? '' ) ) ) );
+        if ( ! $machine_num ) {
+            self::redirect_to(
+                self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => intval( $_POST['city_id'] ) ] ),
+                '', 'El N.º de máquina no puede estar vacío.'
+            );
+        }
+        $machine_code = $company->code . ' ' . $city->code . ' ' . $brand_code . ' No.' . $machine_num;
+
+        if ( $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['machines']} WHERE machine_code=%s", $machine_code ) ) ) {
+            self::redirect_to(
+                self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => intval( $_POST['city_id'] ) ] ),
+                '', 'Ya existe una máquina con el código ' . $machine_code . '. Elige otro N.º.'
+            );
+        }
+
+        $hm = ( isset( $_POST['current_hourmeter'] ) && strlen( trim( $_POST['current_hourmeter'] ) ) )
+            ? floatval( $_POST['current_hourmeter'] ) : 0.0;
 
         $wpdb->insert( $t['machines'], [
-            'company_id' => intval( $_POST['company_id'] ), 'city_id' => intval( $_POST['city_id'] ), 'branch_id' => $branch_id,
-            'machine_code' => $machine_code, 'brand' => sanitize_text_field( $_POST['brand'] ), 'brand_code' => $brand_code,
-            'model' => sanitize_text_field( $_POST['model'] ), 'serial' => sanitize_text_field( $_POST['serial'] ),
-            'contact' => sanitize_text_field( $_POST['contact'] ), 'current_hourmeter' => floatval( $_POST['current_hourmeter'] ),
+            'company_id'  => intval( $_POST['company_id'] ), 'city_id' => intval( $_POST['city_id'] ), 'branch_id' => null,
+            'machine_code' => $machine_code, 'brand' => $brand, 'brand_code' => $brand_code,
+            'model'   => strtoupper( sanitize_text_field( $_POST['model'] ) ),
+            'serial'  => strtoupper( sanitize_text_field( $_POST['serial'] ) ),
+            'contact' => sanitize_text_field( $_POST['contact'] ),
+            'current_hourmeter'       => $hm,
             'scheduled_hours_monthly' => max( 1, floatval( $_POST['scheduled_hours_monthly'] ) ) ?: 480,
-            'status' => sanitize_text_field( $_POST['status'] ), 'notes' => sanitize_textarea_field( $_POST['notes'] ),
+            'status'  => sanitize_text_field( $_POST['status'] ),
+            'notes'   => sanitize_textarea_field( $_POST['notes'] ),
             'updated_at' => current_time( 'mysql' ),
         ] );
 
-        $redirect = $branch_id
-            ? self::admin_url( CMH_SLUG . '-companies', [ 'branch_id' => $branch_id ] )
-            : self::admin_url( CMH_SLUG . '-companies', [ 'city_id'   => intval( $_POST['city_id'] ) ] );
-        self::redirect_to( $redirect, 'Máquina guardada. Código: ' . $machine_code );
+        self::redirect_to(
+            self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => intval( $_POST['city_id'] ) ] ),
+            'Máquina guardada. Código: ' . $machine_code
+        );
     }
 
     public static function save_intervention() {
@@ -975,16 +993,33 @@ class CMH_Admin {
         $prev_hm    = (float) $wpdb->get_var( $wpdb->prepare( "SELECT current_hourmeter FROM {$t['machines']} WHERE id=%d", $machine_id ) );
         $hm_warn    = ( $new_hm > 0 && $prev_hm > 0 && $new_hm < $prev_hm )
             ? sprintf( 'Horómetro actualizado a %.2f h (anterior: %.2f h). Verifica que sea correcto.', $new_hm, $prev_hm ) : '';
-        $branch_id  = isset( $_POST['branch_id'] ) && $_POST['branch_id'] !== '' ? intval( $_POST['branch_id'] ) : null;
+        $brand      = strtoupper( sanitize_text_field( $_POST['brand'] ) );
 
-        $wpdb->update( $t['machines'], [
-            'brand' => sanitize_text_field( $_POST['brand'] ), 'brand_code' => self::brand_code( $_POST['brand'] ),
-            'model' => sanitize_text_field( $_POST['model'] ), 'serial' => sanitize_text_field( $_POST['serial'] ),
-            'contact' => sanitize_text_field( $_POST['contact'] ), 'current_hourmeter' => $new_hm,
+        $data = [
+            'brand'      => $brand,
+            'brand_code' => self::brand_code( $brand ),
+            'model'      => strtoupper( sanitize_text_field( $_POST['model'] ) ),
+            'serial'     => strtoupper( sanitize_text_field( $_POST['serial'] ) ),
+            'contact'    => sanitize_text_field( $_POST['contact'] ),
+            'current_hourmeter'       => $new_hm,
             'scheduled_hours_monthly' => max( 1, floatval( $_POST['scheduled_hours_monthly'] ) ) ?: 480,
-            'branch_id' => $branch_id, 'status' => sanitize_text_field( $_POST['status'] ),
-            'notes' => sanitize_textarea_field( $_POST['notes'] ), 'updated_at' => current_time( 'mysql' ),
-        ], [ 'id' => $machine_id ] );
+            'status'     => sanitize_text_field( $_POST['status'] ),
+            'notes'      => sanitize_textarea_field( $_POST['notes'] ),
+            'updated_at' => current_time( 'mysql' ),
+        ];
+
+        // Actualizar código si se proporcionó uno diferente y no existe ya
+        $new_code = strtoupper( sanitize_text_field( $_POST['machine_code'] ?? '' ) );
+        $old_code = $wpdb->get_var( $wpdb->prepare( "SELECT machine_code FROM {$t['machines']} WHERE id=%d", $machine_id ) );
+        if ( $new_code && $new_code !== $old_code ) {
+            $dupe = $wpdb->get_var( $wpdb->prepare(
+                "SELECT id FROM {$t['machines']} WHERE machine_code=%s AND id!=%d", $new_code, $machine_id
+            ) );
+            if ( ! $dupe ) $data['machine_code'] = $new_code;
+            else $hm_warn .= ( $hm_warn ? ' | ' : '' ) . 'Código duplicado — se mantuvo el original.';
+        }
+
+        $wpdb->update( $t['machines'], $data, [ 'id' => $machine_id ] );
 
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Máquina actualizada.', $hm_warn );
     }
@@ -998,18 +1033,20 @@ class CMH_Admin {
         $m = $wpdb->get_row( $wpdb->prepare( "SELECT machine_code FROM {$t['machines']} WHERE id=%d", $machine_id ) );
         if ( ! $m ) wp_die( 'Máquina no encontrada.' );
 
-        add_filter( 'upload_dir', function ( $dirs ) use ( $m ) {
+        $dir_filter = static function ( $dirs ) use ( $m ) {
             $dirs['subdir'] = '/cm-machine-history/' . $m->machine_code;
             $dirs['path']   = $dirs['basedir'] . $dirs['subdir'];
             $dirs['url']    = $dirs['baseurl'] . $dirs['subdir'];
             return $dirs;
-        } );
+        };
+        add_filter( 'upload_dir', $dir_filter );
         $file = wp_handle_upload( $_FILES['format_file'], [ 'test_form' => false ] );
+        remove_filter( 'upload_dir', $dir_filter );
         if ( isset( $file['error'] ) ) wp_die( $file['error'] );
 
         $wpdb->insert( $t['files'], [
             'machine_id' => $machine_id, 'intervention_id' => intval( $_POST['intervention_id'] ) ?: null,
-            'file_url' => esc_url_raw( $file['url'] ), 'file_path' => $file['file'],
+            'file_url' => esc_url_raw( set_url_scheme( $file['url'] ) ), 'file_path' => $file['file'],
             'file_name' => basename( $file['file'] ), 'file_type' => $file['type'],
             'uploaded_by' => get_current_user_id(),
         ] );
@@ -1111,6 +1148,33 @@ class CMH_Admin {
     }
 
     // =========================================================================
+    // Editar intervención
+    // =========================================================================
+
+    public static function edit_intervention() {
+        self::check();
+        global $wpdb; $t = CMH_Core::tables();
+        $id         = intval( $_POST['intervention_id'] );
+        $machine_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT machine_id FROM {$t['interventions']} WHERE id=%d", $id ) );
+        if ( ! $machine_id ) wp_die( 'Intervención no encontrada.' );
+
+        $mtype     = sanitize_text_field( $_POST['maintenance_type'] );
+        $manual_av = isset( $_POST['affects_availability'] ) ? 1 : 0;
+
+        $wpdb->update( $t['interventions'], [
+            'intervention_date'    => sanitize_text_field( $_POST['intervention_date'] ),
+            'maintenance_type'     => $mtype,
+            'technician'           => sanitize_text_field( $_POST['technician'] ),
+            'downtime_hours'       => floatval( $_POST['downtime_hours'] ),
+            'cost'                 => floatval( $_POST['cost'] ),
+            'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
+            'observations'         => sanitize_textarea_field( $_POST['observations'] ),
+        ], [ 'id' => $id ] );
+
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Intervención actualizada.' );
+    }
+
+    // =========================================================================
     // AJAX
     // =========================================================================
 
@@ -1118,7 +1182,31 @@ class CMH_Admin {
         if ( ! current_user_can( 'read' ) ) wp_send_json_error( [ 'message' => 'Sin permisos.' ] );
         global $wpdb; $t = CMH_Core::tables();
         $code = sanitize_text_field( $_GET['code'] ?? '' );
-        $m    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['machines']} WHERE machine_code=%s OR serial=%s", $code, $code ) );
+        $m    = $wpdb->get_row( $wpdb->prepare(
+            "SELECT m.*, c.name company_name, ci.name city_name
+             FROM {$t['machines']} m
+             JOIN {$t['companies']} c  ON c.id=m.company_id
+             JOIN {$t['cities']}    ci ON ci.id=m.city_id
+             WHERE m.machine_code=%s OR m.serial=%s",
+            $code, $code
+        ) );
+        if ( ! $m ) wp_send_json_error( [ 'message' => 'Máquina no encontrada.' ] );
+        wp_send_json_success( $m );
+    }
+
+    public static function ajax_get_machine_public() {
+        global $wpdb; $t = CMH_Core::tables();
+        $code = sanitize_text_field( $_GET['code'] ?? '' );
+        if ( ! $code ) wp_send_json_error( [ 'message' => 'Código requerido.' ] );
+        $m = $wpdb->get_row( $wpdb->prepare(
+            "SELECT m.machine_code, m.brand, m.model, m.serial, m.contact,
+                    c.name company_name, ci.name city_name
+             FROM {$t['machines']} m
+             JOIN {$t['companies']} c  ON c.id=m.company_id
+             JOIN {$t['cities']}    ci ON ci.id=m.city_id
+             WHERE m.machine_code=%s OR m.serial=%s",
+            $code, $code
+        ) );
         if ( ! $m ) wp_send_json_error( [ 'message' => 'Máquina no encontrada.' ] );
         wp_send_json_success( $m );
     }
