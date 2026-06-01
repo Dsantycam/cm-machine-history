@@ -54,18 +54,26 @@ class CMH_Integration {
                 'observations_field' => 'textarea-1',
             ],
             226 => [
-                'form_type'           => 'correctivo',
-                'maintenance_type'    => 'correctivo',
-                'machine_field'       => 'text-6',
-                'hourmeter_field'     => 'text-5',
-                'date_field'          => 'date-1',
-                'technician_field'    => 'name-2',
-                'remission_field'     => 'hidden-1',
-                'contact_field'       => 'text-4',
-                'parts_field'         => 'textarea-1',
-                'worked_hours_field'  => 'number-1',
-                'services_field'      => 'textarea-2',
-                'observations_field'  => 'textarea-3',
+                'form_type'              => 'correctivo',
+                'maintenance_type'       => 'preventivo',   // fallback si el checkbox viene vacío
+                'maintenance_type_field' => 'checkbox-1',   // "tipo de mantenimiento"
+                'maintenance_type_map'   => [               // orden = prioridad (correctivo primero)
+                    'correctivo'  => 'averia',
+                    'evaluacion'  => 'evaluacion',
+                    'remision'    => 'preventivo',
+                    'preventivo'  => 'preventivo',
+                ],
+                'machine_field'          => 'text-6',
+                'hourmeter_field'        => 'text-5',
+                'date_field'             => 'date-1',
+                'technician_field'       => 'name-2',
+                'remission_field'        => 'hidden-1',
+                'contact_field'          => 'text-4',
+                'parts_field'            => 'textarea-1',
+                'worked_hours_field'     => 'number-1',
+                'downtime_hours_field'   => 'number-2',     // "horas detenida la máquina"
+                'services_field'         => 'textarea-2',
+                'observations_field'     => 'textarea-3',
             ],
         ];
     }
@@ -121,16 +129,41 @@ class CMH_Integration {
             return;
         }
 
-        $date     = self::normalize_date( self::field( $data, $cfg['date_field'] ?? 'date-1' ) );
-        $hourmeter = self::to_float( self::field( $data, $cfg['hourmeter_field'] ?? '' ) );
-        $worked    = self::to_float( self::field( $data, $cfg['worked_hours_field'] ?? '' ) );
+        $date       = self::normalize_date( self::field( $data, $cfg['date_field'] ?? 'date-1' ) );
+        $hourmeter  = self::to_float( self::field( $data, $cfg['hourmeter_field'] ?? '' ) );
+        $worked     = self::to_float( self::field( $data, $cfg['worked_hours_field'] ?? '' ) );
+        $downtime   = self::to_float( self::field( $data, $cfg['downtime_hours_field'] ?? '' ) );
         $technician = self::human( self::field( $data, $cfg['technician_field'] ?? '' ) );
         $parts      = self::human( self::field( $data, $cfg['parts_field'] ?? '' ) );
         $services   = self::human( self::field( $data, $cfg['services_field'] ?? '' ) );
         $obs        = self::human( self::field( $data, $cfg['observations_field'] ?? '' ) );
         if ( $remission ) $obs = trim( $obs . "\nRemisión: " . self::human( $remission ) );
 
+        // Determinar tipo de mantenimiento desde el campo checkbox/radio/select del formulario
         $maintenance_type = $cfg['maintenance_type'];
+        if ( ! empty( $cfg['maintenance_type_field'] ) ) {
+            $raw = self::field( $data, $cfg['maintenance_type_field'] );
+
+            // Normalizar a array de strings sin acentos y en minúsculas
+            if ( is_array( $raw ) ) {
+                $selected = array_map( function ( $v ) {
+                    return strtolower( remove_accents( trim( (string) $v ) ) );
+                }, $raw );
+            } else {
+                $str      = strtolower( remove_accents( self::human( $raw ) ) );
+                $selected = array_filter( array_map( 'trim', preg_split( '/[\s,;]+/', $str ) ) );
+            }
+
+            // Recorrer el mapa en orden de prioridad (correctivo primero en el config)
+            $map = $cfg['maintenance_type_map'] ?? [];
+            foreach ( $map as $key => $mapped ) {
+                if ( in_array( strtolower( remove_accents( $key ) ), $selected, true ) ) {
+                    $maintenance_type = $mapped;
+                    break;
+                }
+            }
+        }
+
         $affects_av = CMH_Metrics::auto_affects_availability( $maintenance_type );
 
         $wpdb->insert( $t['interventions'], [
@@ -143,7 +176,7 @@ class CMH_Integration {
             'technician'          => sanitize_text_field( $technician ),
             'hourmeter'           => $hourmeter,
             'worked_hours'        => $worked,
-            'downtime_hours'      => 0,
+            'downtime_hours'      => $downtime,
             'cost'                => 0,
             'affects_availability'=> $affects_av,
             'parts'               => sanitize_textarea_field( $parts ),
@@ -296,10 +329,11 @@ class CMH_Integration {
         if ( is_object( $value ) ) $value = get_object_vars( $value );
         if ( ! is_array( $value ) ) return $out;
         foreach ( $value as $k => $v ) {
-            if ( is_string( $k ) && preg_match( '/^(text|number|name|date|hidden|textarea|address|email|phone)-/i', $k ) ) {
+            if ( is_string( $k ) && preg_match( '/^(text|number|name|date|hidden|textarea|address|email|phone|checkbox|radio|select)-/i', $k ) ) {
                 $out[ $k ] = $v;
+            } elseif ( is_array( $v ) || is_object( $v ) ) {
+                self::flatten_submission_data( $v, $out );
             }
-            if ( is_array( $v ) || is_object( $v ) ) self::flatten_submission_data( $v, $out );
         }
         return $out;
     }
