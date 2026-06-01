@@ -91,6 +91,22 @@ class CMH_Integration {
 
         if ( ! $form_id || empty( $cfg_map[ $form_id ] ) ) return;
 
+        // forminator_form_after_handle_submit dispara incluso cuando hay errores de
+        // validación. Solo continuar si la respuesta indica éxito explícito.
+        // forminator_form_after_save_entry solo dispara al guardar → no requiere chequeo.
+        if ( current_filter() === 'forminator_form_after_handle_submit' ) {
+            $ok = false;
+            foreach ( $args as $arg ) {
+                if ( is_array( $arg ) && isset( $arg['success'] ) ) {
+                    $ok = (bool) $arg['success']; break;
+                }
+                if ( is_object( $arg ) && isset( $arg->success ) ) {
+                    $ok = (bool) $arg->success; break;
+                }
+            }
+            if ( ! $ok ) return;
+        }
+
         $cfg  = $cfg_map[ $form_id ];
         $data = self::flatten_submission_data( $args );
         if ( empty( $data ) ) $data = $_POST;
