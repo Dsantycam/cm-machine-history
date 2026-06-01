@@ -3,7 +3,7 @@
  * Plugin Name: CM Machine History
  * Plugin URI:  https://santiagocamachomkt.com
  * Description: CMMS para gestión de historial de mantenimiento de maquinaria industrial — montacargas y equipos industriales.
- * Version:     0.7.0
+ * Version:     0.7.1
  * Author:      Santiago Camacho
  * Author URI:  https://santiagocamachomkt.com
  * Text Domain: cm-machine-history
