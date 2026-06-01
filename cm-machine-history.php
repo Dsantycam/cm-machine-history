@@ -32,16 +32,13 @@ CMH_Integration::init();
 // ─── Auto-actualizaciones vía Plugin Update Checker ──────────────────────────
 // Requiere la librería en lib/plugin-update-checker/.
 // Descarga: https://github.com/YahnisElsts/plugin-update-checker/releases
-// Reemplaza 'TU_USUARIO/cm-machine-history' con tu repo de GitHub.
+// El repositorio debe ser público para distribución sin autenticación.
 $cmh_puc = CMH_DIR . 'lib/plugin-update-checker/load-v5p5.php';
 if ( file_exists( $cmh_puc ) ) {
     require_once $cmh_puc;
-    $cmh_updater = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
-        'https://github.com/TU_USUARIO/cm-machine-history/',
+    \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+        'https://github.com/Dsantycam/cm-machine-history/',
         __FILE__,
         'cm-machine-history'
     );
-    // Para repositorio privado, genera un Personal Access Token en GitHub
-    // y descomenta la siguiente línea:
-    // $cmh_updater->setAuthentication( 'ghp_TU_TOKEN_AQUI' );
 }
