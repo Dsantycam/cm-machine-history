@@ -234,9 +234,11 @@ class CMH_Integration {
         global $wpdb;
         $t = CMH_Core::tables();
 
-        if ( $wpdb->get_var( $wpdb->prepare(
-            "SELECT id FROM {$t['files']} WHERE intervention_id=%d LIMIT 1", $intervention_id
-        ) ) ) return;
+        $existing = $wpdb->get_row( $wpdb->prepare(
+            "SELECT id, file_url FROM {$t['files']} WHERE intervention_id=%d LIMIT 1", $intervention_id
+        ) );
+        // Si ya hay copia propia (URL en cm-machine-history/), no hace falta hacer nada
+        if ( $existing && strpos( $existing->file_url, '/cm-machine-history/' ) !== false ) return;
 
         $upload = wp_upload_dir();
         $base   = trailingslashit( $upload['basedir'] ) . 'e2pdf';
@@ -275,15 +277,21 @@ class CMH_Integration {
             $store_url = esc_url_raw( set_url_scheme( trailingslashit( $upload['baseurl'] ) . ltrim( str_replace( DIRECTORY_SEPARATOR, '/', $rel ), '/' ) ) );
         }
 
-        $wpdb->insert( $t['files'], [
-            'machine_id'      => (int) $machine_id,
-            'intervention_id' => (int) $intervention_id,
-            'file_url'        => $store_url,
-            'file_path'       => $store_path,
-            'file_name'       => basename( $candidate ),
-            'file_type'       => 'application/pdf',
-            'uploaded_by'     => 0,
-        ] );
+        $file_data = [
+            'file_url'  => $store_url,
+            'file_path' => $store_path,
+            'file_name' => basename( $candidate ),
+            'file_type' => 'application/pdf',
+        ];
+        if ( $existing ) {
+            $wpdb->update( $t['files'], $file_data, [ 'id' => (int) $existing->id ] );
+        } else {
+            $wpdb->insert( $t['files'], array_merge( $file_data, [
+                'machine_id'      => (int) $machine_id,
+                'intervention_id' => (int) $intervention_id,
+                'uploaded_by'     => 0,
+            ] ) );
+        }
 
         CMH_Core::log( 'success', null, $machine_code, $intervention_id,
             'PDF asociado automáticamente: ' . basename( $candidate ), [] );
