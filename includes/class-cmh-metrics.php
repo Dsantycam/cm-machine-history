@@ -307,4 +307,16 @@ class CMH_Metrics {
                                'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic' ];
         return $names[ (int) $month ] . ' ' . $year;
     }
+
+    /**
+     * Días hasta el próximo mantenimiento.
+     * Retorna entero positivo (días restantes), negativo (días vencido) o null si no hay fecha.
+     */
+    public static function maintenance_days( $next_date ) {
+        if ( ! $next_date ) return null;
+        $today = new DateTime( current_time( 'Y-m-d' ) );
+        $next  = new DateTime( $next_date );
+        $diff  = (int) $today->diff( $next )->days;
+        return $next >= $today ? $diff : -$diff;
+    }
 }
