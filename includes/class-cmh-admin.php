@@ -24,6 +24,7 @@ class CMH_Admin {
         add_action( 'admin_post_cm_edit_intervention', [ __CLASS__, 'edit_intervention' ] );
         add_action( 'admin_post_cm_update_company',    [ __CLASS__, 'update_company' ] );
         add_action( 'admin_post_cm_update_city',       [ __CLASS__, 'update_city' ] );
+        add_action( 'admin_post_cm_delete_intervention', [ __CLASS__, 'delete_intervention' ] );
         add_action( 'admin_post_cm_delete_machine',    [ __CLASS__, 'delete_machine' ] );
         add_action( 'admin_post_cm_delete_city',       [ __CLASS__, 'delete_city' ] );
         add_action( 'admin_post_cm_delete_company',    [ __CLASS__, 'delete_company' ] );
@@ -202,6 +203,42 @@ class CMH_Admin {
                     . '<td><span class="cmh-avail-badge ' . $cls . '">' . esc_html( CMH_Metrics::fmt_pct( $cr['availability'] ) ) . '</span></td>'
                     . '<td>' . intval( $cr['averia_count'] ) . '</td>'
                     . '<td><a class="button button-small" href="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $cr['id'] ] ) ) . '">Ver hoja de vida</a></td>'
+                    . '</tr>';
+            }
+            echo '</tbody></table></div>';
+        }
+
+        // Mantenimientos próximos (≤ 30 días o vencidos)
+        $in30     = date( 'Y-m-d', strtotime( '+30 days', current_time( 'timestamp' ) ) );
+        $upcoming = $wpdb->get_results( $wpdb->prepare(
+            "SELECT m.id, m.machine_code, m.brand, m.model, m.next_maintenance_date,
+                    c.name company_name, ci.name city_name
+             FROM {$t['machines']} m
+             JOIN {$t['companies']} c  ON c.id=m.company_id
+             JOIN {$t['cities']}   ci ON ci.id=m.city_id
+             WHERE m.next_maintenance_date IS NOT NULL AND m.next_maintenance_date <= %s
+             ORDER BY m.next_maintenance_date ASC",
+            $in30
+        ) );
+        if ( $upcoming ) {
+            echo '<div class="cmh-panel">'
+                . '<h2>Mantenimientos próximos <small style="font-weight:400;font-size:13px;color:#646970">— próximos 30 días o vencidos</small></h2>'
+                . '<table class="widefat cmh"><thead><tr>'
+                . '<th>Máquina</th><th>Equipo</th><th>Ubicación</th><th>Fecha programada</th><th>Estado</th><th></th>'
+                . '</tr></thead><tbody>';
+            foreach ( $upcoming as $um ) {
+                $days = CMH_Metrics::maintenance_days( $um->next_maintenance_date );
+                if ( $days < 0 )       $sbadge = '<span class="cmh-badge" style="background:#fce8e8;color:#d63638">Vencido hace ' . abs( $days ) . ' d</span>';
+                elseif ( $days <= 7 )  $sbadge = '<span class="cmh-badge" style="background:#fce8e8;color:#d63638">En ' . $days . ' días</span>';
+                elseif ( $days <= 15 ) $sbadge = '<span class="cmh-badge" style="background:#fff3cd;color:#7a4f00">En ' . $days . ' días</span>';
+                else                   $sbadge = '<span class="cmh-badge" style="background:#e6f4ea;color:#1a6630">En ' . $days . ' días</span>';
+                echo '<tr>'
+                    . '<td><strong>' . esc_html( $um->machine_code ) . '</strong></td>'
+                    . '<td>' . esc_html( trim( $um->brand . ' ' . $um->model ) ) . '</td>'
+                    . '<td style="font-size:12px">' . esc_html( $um->company_name . ' / ' . $um->city_name ) . '</td>'
+                    . '<td>' . esc_html( $um->next_maintenance_date ) . '</td>'
+                    . '<td>' . $sbadge . '</td>'
+                    . '<td><a class="button button-small" href="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $um->id ] ) ) . '">Ver</a></td>'
                     . '</tr>';
             }
             echo '</tbody></table></div>';
@@ -471,13 +508,28 @@ class CMH_Admin {
         $averia_now = CMH_Metrics::averia_count( $machine_id, $month, $year );
         $is_crit    = CMH_Metrics::is_critical( $machine_id );
         $avail_acc  = $avail_now === null ? 'blue' : ( $avail_now >= 90 ? 'ok' : ( $avail_now >= 70 ? 'warn' : 'danger' ) );
+        $maint_days = CMH_Metrics::maintenance_days( $m->next_maintenance_date );
+        if ( $maint_days === null ) {
+            $maint_badge = '';
+            $maint_label = '—';
+        } elseif ( $maint_days < 0 ) {
+            $maint_badge = ' <span class="cmh-badge" style="background:#fce8e8;color:#d63638">Mant. vencido hace ' . abs( $maint_days ) . ' d</span>';
+            $maint_label = esc_html( $m->next_maintenance_date ) . ' <em style="color:#d63638">(vencido hace ' . abs( $maint_days ) . ' días)</em>';
+        } elseif ( $maint_days <= 15 ) {
+            $maint_badge = ' <span class="cmh-badge" style="background:#fff3cd;color:#7a4f00">Mant. en ' . $maint_days . ' días</span>';
+            $maint_label = esc_html( $m->next_maintenance_date ) . ' <em style="color:#7a4f00">(en ' . $maint_days . ' días)</em>';
+        } else {
+            $maint_badge = '';
+            $maint_label = esc_html( $m->next_maintenance_date ) . ' <em style="color:#646970">(en ' . $maint_days . ' días)</em>';
+        }
 
         // Hero
         $loc = $m->company_name . ' / ' . $m->city_name . ( $m->branch_id ? ' / ' . $m->branch_name : '' );
         echo '<div class="cmh-hero-block"><div>'
             . '<div class="cmh-kicker">Hoja de vida técnica</div>'
             . '<h2>' . esc_html( $m->machine_code ) . ' ' . self::status_badge( $m->status )
-            . ( $is_crit ? ' <span class="cmh-badge cmh-badge-critical">Crítica</span>' : '' ) . '</h2>'
+            . ( $is_crit ? ' <span class="cmh-badge cmh-badge-critical">Crítica</span>' : '' )
+            . $maint_badge . '</h2>'
             . '<p>' . esc_html( $loc ) . ' &nbsp;·&nbsp; ' . esc_html( trim( $m->brand . ' ' . $m->model ) ) . '</p>'
             . '</div><div class="cmh-hero-actions">'
             . '<a class="button cmh-btn-print" href="#">Imprimir hoja de vida</a>'
@@ -520,6 +572,7 @@ class CMH_Admin {
             . '<div><span>Última intervención</span><strong>' . esc_html( $last ? $last->intervention_date : '—' ) . '</strong></div>'
             . '<div><span>Último técnico</span><strong>' . esc_html( $last && $last->technician ? $last->technician : '—' ) . '</strong></div>'
             . '<div><span>Averías este mes</span><strong>' . intval( $averia_now ) . '</strong></div>'
+            . '<div><span>Próximo mantenimiento</span><strong>' . $maint_label . '</strong></div>'
             . '</div>'
             . ( $m->notes ? '<div class="cmh-note"><strong>Notas:</strong> ' . esc_html( $m->notes ) . '</div>' : '' )
             . '</div>';
@@ -668,6 +721,7 @@ class CMH_Admin {
             . '<input type="number" step="1" name="scheduled_hours_monthly" value="480" min="1" required></label>'
             . '</div>'
             . '<label>Estado<select name="status"><option value="activa">Activa</option><option value="mantenimiento">En mantenimiento</option><option value="inactiva">Inactiva</option></select></label>'
+            . '<label>Próximo mantenimiento <span class="cmh-optional">(opcional)</span><input type="date" name="next_maintenance_date"></label>'
             . '<label>Notas<textarea name="notes"></textarea></label>'
             . '<button class="button button-primary">Guardar máquina</button></form>';
     }
@@ -692,6 +746,7 @@ class CMH_Admin {
         foreach ( [ 'activa' => 'Activa', 'mantenimiento' => 'En mantenimiento', 'inactiva' => 'Inactiva', 'fuera_servicio' => 'Fuera de servicio' ] as $k => $v )
             echo '<option value="' . esc_attr( $k ) . '" ' . selected( $m->status, $k, false ) . '>' . esc_html( $v ) . '</option>';
         echo '</select></label>'
+            . '<label>Próximo mantenimiento <span class="cmh-optional">(opcional)</span><input type="date" name="next_maintenance_date" value="' . esc_attr( $m->next_maintenance_date ?: '' ) . '"></label>'
             . '<label>Notas<textarea name="notes">' . esc_textarea( $m->notes ) . '</textarea></label>'
             . '<button class="button button-primary">Guardar cambios</button></form>';
     }
@@ -740,12 +795,20 @@ class CMH_Admin {
         $dot_class = [ 'preventivo' => 'cmh-dot-preventivo', 'correctivo' => 'cmh-dot-correctivo', 'averia' => 'cmh-dot-averia', 'evaluacion' => 'cmh-dot-evaluacion' ];
         $card_class = [ 'preventivo' => 'cmh-card-preventivo', 'correctivo' => 'cmh-card-correctivo', 'averia' => 'cmh-card-averia' ];
 
+        echo '<div class="cmh-filter-bar" style="margin-bottom:16px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">'
+            . '<span style="font-size:12px;font-weight:500;color:#646970">Filtrar:</span>'
+            . '<button type="button" class="button button-small cmh-tl-filter active" data-filter="">Todas</button>'
+            . '<button type="button" class="button button-small cmh-tl-filter" data-filter="preventivo">Preventivo</button>'
+            . '<button type="button" class="button button-small cmh-tl-filter" data-filter="averia">Avería</button>'
+            . '<button type="button" class="button button-small cmh-tl-filter" data-filter="correctivo">Correctivo</button>'
+            . '<button type="button" class="button button-small cmh-tl-filter" data-filter="evaluacion">Evaluación</button>'
+            . '</div>';
         echo '<div class="cmh-timeline">';
         foreach ( $rows as $r ) {
             $mt   = strtolower( $r->maintenance_type ?: '' );
             $dc   = $dot_class[ $mt ] ?? '';
             $cc   = $card_class[ $mt ] ?? '';
-            echo '<div class="cmh-timeline-item">'
+            echo '<div class="cmh-timeline-item" data-mtype="' . esc_attr( $mt ) . '">'
                 . '<div class="cmh-dot ' . $dc . '"></div>'
                 . '<div class="cmh-timeline-card ' . $cc . '">'
                 . '<div class="cmh-timeline-head">'
@@ -763,6 +826,12 @@ class CMH_Admin {
             echo '<div class="cmh-card-actions">';
             if ( $r->file_url ) echo '<a class="button button-small" target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>';
             echo '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-edit-' . intval( $r->id ) . '">Editar</button>';
+            echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline" onsubmit="return confirm(\'¿Eliminar esta intervención? La acción es irreversible.\')">'
+                . '<input type="hidden" name="action" value="cm_delete_intervention">'
+                . '<input type="hidden" name="intervention_id" value="' . intval( $r->id ) . '">'
+                . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                . '<button type="submit" class="button button-small" style="color:#d63638;border-color:#d63638">Eliminar</button>'
+                . '</form>';
             echo '<span class="cmh-id-hint">ID #' . intval( $r->id ) . '</span></div>';
 
             // ── Formulario inline de edición ──────────────────────────────────
@@ -872,6 +941,11 @@ class CMH_Admin {
             . '<label>Repuestos / insumos</label><textarea name="parts"></textarea>'
             . '<label>Servicios prestados</label><textarea name="services"></textarea>'
             . '<label>Observaciones</label><textarea name="observations"></textarea>'
+            . '</div>'
+            . '<div class="cmh-form-section">'
+            . '<p class="cmh-form-section-title">Programar próximo mantenimiento</p>'
+            . '<label>Fecha <span class="cmh-optional">(opcional)</span><input type="date" name="next_maintenance_date" min="' . esc_attr( current_time( 'Y-m-d' ) ) . '"></label>'
+            . '<p style="font-size:12px;color:#646970;margin:2px 0 0">Actualiza la fecha en la hoja de vida de la máquina.</p>'
             . '</div>'
             . '<button class="button button-primary">Guardar intervención</button></form>';
     }
@@ -990,6 +1064,7 @@ class CMH_Admin {
             'current_hourmeter'       => $hm,
             'scheduled_hours_monthly' => max( 1, floatval( $_POST['scheduled_hours_monthly'] ) ) ?: 480,
             'status'  => sanitize_text_field( $_POST['status'] ),
+            'next_maintenance_date' => sanitize_text_field( $_POST['next_maintenance_date'] ?? '' ) ?: null,
             'notes'   => sanitize_textarea_field( $_POST['notes'] ),
             'updated_at' => current_time( 'mysql' ),
         ] );
@@ -1038,6 +1113,14 @@ class CMH_Admin {
                 $wpdb->update( $t['machines'], [ 'status' => $new_status, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
         }
 
+        $next_maint = sanitize_text_field( $_POST['next_maintenance_date'] ?? '' );
+        if ( $next_maint ) {
+            $wpdb->update( $t['machines'],
+                [ 'next_maintenance_date' => $next_maint, 'updated_at' => current_time( 'mysql' ) ],
+                [ 'id' => $machine_id ]
+            );
+        }
+
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Intervención guardada.', $hm_warn );
     }
 
@@ -1058,9 +1141,10 @@ class CMH_Admin {
             'contact'    => sanitize_text_field( $_POST['contact'] ),
             'current_hourmeter'       => $new_hm,
             'scheduled_hours_monthly' => max( 1, floatval( $_POST['scheduled_hours_monthly'] ) ) ?: 480,
-            'status'     => sanitize_text_field( $_POST['status'] ),
-            'notes'      => sanitize_textarea_field( $_POST['notes'] ),
-            'updated_at' => current_time( 'mysql' ),
+            'status'               => sanitize_text_field( $_POST['status'] ),
+            'next_maintenance_date' => sanitize_text_field( $_POST['next_maintenance_date'] ?? '' ) ?: null,
+            'notes'                => sanitize_textarea_field( $_POST['notes'] ),
+            'updated_at'           => current_time( 'mysql' ),
         ];
 
         // Actualizar código si se proporcionó uno diferente y no existe ya
@@ -1264,6 +1348,27 @@ class CMH_Admin {
         ) );
         if ( ! $m ) wp_send_json_error( [ 'message' => 'Máquina no encontrada.' ] );
         wp_send_json_success( $m );
+    }
+
+    // =========================================================================
+    // Eliminar intervención individual
+    // =========================================================================
+
+    public static function delete_intervention() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $id = intval( $_POST['intervention_id'] );
+        $iv = $wpdb->get_row( $wpdb->prepare( "SELECT machine_id FROM {$t['interventions']} WHERE id=%d", $id ) );
+        if ( ! $iv ) wp_die( 'Intervención no encontrada.' );
+        $files = $wpdb->get_results( $wpdb->prepare( "SELECT file_path FROM {$t['files']} WHERE intervention_id=%d", $id ) );
+        foreach ( $files as $f ) {
+            if ( $f->file_path && file_exists( $f->file_path ) ) @unlink( $f->file_path );
+        }
+        $wpdb->delete( $t['files'],         [ 'intervention_id' => $id ] );
+        $wpdb->delete( $t['interventions'], [ 'id'              => $id ] );
+        self::redirect_to(
+            self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $iv->machine_id ] ),
+            'Intervención eliminada.'
+        );
     }
 
     // =========================================================================

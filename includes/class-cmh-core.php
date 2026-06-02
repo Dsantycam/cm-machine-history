@@ -76,6 +76,7 @@ class CMH_Core {
             scheduled_hours_monthly DECIMAL(10,2)   NOT NULL DEFAULT 480,
             status                  VARCHAR(40)     NOT NULL DEFAULT 'activa',
             notes                   TEXT            NULL,
+            next_maintenance_date   DATE            NULL,
             created_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at              DATETIME        NULL,
             PRIMARY KEY (id),
@@ -161,6 +162,12 @@ class CMH_Core {
         $col2 = $wpdb->get_row( "SHOW COLUMNS FROM {$t['machines']} LIKE 'scheduled_hours_monthly'" );
         if ( ! $col2 ) {
             $wpdb->query( "ALTER TABLE {$t['machines']} ADD COLUMN scheduled_hours_monthly DECIMAL(10,2) NOT NULL DEFAULT 480 AFTER current_hourmeter" );
+        }
+
+        // Agrega next_maintenance_date si no existe (instalaciones previas a v0.8.6).
+        $col3 = $wpdb->get_row( "SHOW COLUMNS FROM {$t['machines']} LIKE 'next_maintenance_date'" );
+        if ( ! $col3 ) {
+            $wpdb->query( "ALTER TABLE {$t['machines']} ADD COLUMN next_maintenance_date DATE NULL DEFAULT NULL" );
         }
     }
 

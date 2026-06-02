@@ -1,6 +1,6 @@
 # CM Machine History — Plan maestro del proyecto
 
-**Versión actual:** 0.8.5  
+**Versión actual:** 0.8.6  
 **Autor:** Santiago Camacho — santiagocamachomkt.com  
 **Repositorio:** https://github.com/Dsantycam/cm-machine-history  
 **Última actualización de este documento:** 2026-06-01
@@ -489,6 +489,18 @@ El endpoint `cmh_get_machine` es público (`nopriv`) para que funcione sin login
 - Mapa completo: evaluación → evaluacion, remisión → preventivo, preventivo → preventivo
 - Prioridad: si hay múltiples seleccionados y uno es "correctivo", siempre gana avería
 - **Fix `flatten_submission_data`** — ahora captura campos `checkbox`, `radio` y `select` (antes se ignoraban)
+
+### ✅ v0.8.6 — Eliminar intervención, filtros timeline, próximo mantenimiento
+
+- **Eliminar intervención individual** — botón "Eliminar" en cada card del timeline con confirmación; borra archivo en disco y registro de BD
+- **Filtros en el timeline** — barra de botones sobre el timeline para filtrar por tipo (Todas / Preventivo / Avería / Correctivo / Evaluación) sin recargar la página
+- **Próximo mantenimiento programado**:
+  - Nuevo campo `next_maintenance_date` en `cmh_machines` (migración automática)
+  - Configurable desde "Crear máquina" y tab "Editar" de la hoja de vida
+  - Al registrar una intervención (manual), campo opcional para actualizar la fecha del próximo mantenimiento
+  - Badge en el hero de la hoja de vida cuando el mantenimiento está próximo (≤ 15 días) o vencido
+  - Fila "Próximo mantenimiento" en el tab Resumen con días restantes y estado en color
+  - Sección "Mantenimientos próximos" en el dashboard: lista máquinas con fecha ≤ 30 días o vencidas
 
 ### ✅ v0.8.5 — Borrar entidades + editar empresa/ciudad + fix PDF retry
 

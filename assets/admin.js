@@ -130,6 +130,23 @@
         if (target) $('#' + target).slideToggle(200);
     });
 
+    // ─── Filtros del timeline de intervenciones ───────────────────────────────
+    $(document).on('click', '.cmh-tl-filter', function () {
+        var $btn    = $(this);
+        var filter  = $btn.data('filter');
+        var $panel  = $btn.closest('.cmh-tab-panel, .cmh-panel');
+        $panel.find('.cmh-tl-filter').removeClass('active');
+        $btn.addClass('active');
+        var $items = $panel.find('.cmh-timeline-item');
+        if ( !filter ) {
+            $items.show();
+        } else {
+            $items.each(function () {
+                $(this).toggle( $(this).data('mtype') === filter );
+            });
+        }
+    });
+
     // ─── Forzar mayúsculas en campos marcados ─────────────────────────────────
     $(document).on('input', '.cmh-uppercase', function () {
         var pos = this.selectionStart;
