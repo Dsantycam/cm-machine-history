@@ -34,11 +34,11 @@ class CMH_Admin {
 
     public static function admin_menu() {
         $slug = CMH_SLUG;
-        add_menu_page( 'Historial de Máquinas', 'Máquinas', 'manage_options', $slug, [ __CLASS__, 'page_dashboard' ], 'dashicons-hammer', 26 );
-        add_submenu_page( $slug, 'Dashboard',       'Dashboard',       'manage_options', $slug,                  [ __CLASS__, 'page_dashboard' ] );
-        add_submenu_page( $slug, 'Empresas',        'Empresas',        'manage_options', $slug . '-companies',   [ __CLASS__, 'page_companies' ] );
-        add_submenu_page( $slug, 'Buscar máquinas', 'Buscar máquinas', 'manage_options', $slug . '-machines',    [ __CLASS__, 'page_machines' ] );
-        add_submenu_page( $slug, 'Integración',     'Integración',     'manage_options', $slug . '-integration', [ __CLASS__, 'page_integration' ] );
+        add_menu_page( 'Historial de Máquinas', 'Máquinas', 'edit_others_posts', $slug, [ __CLASS__, 'page_dashboard' ], 'dashicons-hammer', 26 );
+        add_submenu_page( $slug, 'Dashboard',       'Dashboard',       'edit_others_posts', $slug,                  [ __CLASS__, 'page_dashboard' ] );
+        add_submenu_page( $slug, 'Empresas',        'Empresas',        'edit_others_posts', $slug . '-companies',   [ __CLASS__, 'page_companies' ] );
+        add_submenu_page( $slug, 'Buscar máquinas', 'Buscar máquinas', 'edit_others_posts', $slug . '-machines',    [ __CLASS__, 'page_machines' ] );
+        add_submenu_page( $slug, 'Integración',     'Integración',     'edit_others_posts', $slug . '-integration', [ __CLASS__, 'page_integration' ] );
     }
 
     public static function assets( $hook ) {
@@ -66,7 +66,7 @@ class CMH_Admin {
     }
 
     public static function check() {
-        if ( ! current_user_can( 'manage_options' ) ) wp_die( 'Sin permisos.' );
+        if ( ! current_user_can( 'edit_others_posts' ) ) wp_die( 'Sin permisos.' );
         check_admin_referer( 'cmh_action' );
     }
 
@@ -1197,7 +1197,7 @@ class CMH_Admin {
     // =========================================================================
 
     public static function export_csv() {
-        if ( ! current_user_can( 'manage_options' ) ) wp_die( 'Sin permisos.' );
+        if ( ! current_user_can( 'edit_others_posts' ) ) wp_die( 'Sin permisos.' );
         check_admin_referer( 'cmh_action' );
 
         $type = sanitize_key( $_GET['type'] ?? 'machines' );
