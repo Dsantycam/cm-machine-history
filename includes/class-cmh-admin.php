@@ -22,6 +22,11 @@ class CMH_Admin {
         add_action( 'admin_post_cm_update_machine',    [ __CLASS__, 'update_machine' ] );
         add_action( 'admin_post_cm_export_csv',        [ __CLASS__, 'export_csv' ] );
         add_action( 'admin_post_cm_edit_intervention', [ __CLASS__, 'edit_intervention' ] );
+        add_action( 'admin_post_cm_update_company',    [ __CLASS__, 'update_company' ] );
+        add_action( 'admin_post_cm_update_city',       [ __CLASS__, 'update_city' ] );
+        add_action( 'admin_post_cm_delete_machine',    [ __CLASS__, 'delete_machine' ] );
+        add_action( 'admin_post_cm_delete_city',       [ __CLASS__, 'delete_city' ] );
+        add_action( 'admin_post_cm_delete_company',    [ __CLASS__, 'delete_company' ] );
         add_action( 'wp_ajax_cmh_get_machine',         [ __CLASS__, 'ajax_get_machine' ] );
         add_action( 'wp_ajax_nopriv_cmh_get_machine',  [ __CLASS__, 'ajax_get_machine_public' ] );
     }
@@ -245,7 +250,15 @@ class CMH_Admin {
             echo '<tr><td><strong>' . esc_html( $r->name ) . '</strong></td>'
                 . '<td><code>' . esc_html( $r->code ) . '</code></td>'
                 . '<td>' . intval( $r->cities ) . '</td><td>' . intval( $r->machines ) . '</td>'
-                . '<td><a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $r->id ] ) ) . '">Entrar</a></td></tr>';
+                . '<td style="display:flex;gap:6px;align-items:center">'
+                . '<a class="button button-small" href="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $r->id ] ) ) . '">Entrar</a>'
+                . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Eliminar empresa \'+' . json_encode( $r->name ) . '+\' con ' . intval( $r->cities ) . ' ciudades y ' . intval( $r->machines ) . ' máquinas? Esta acción es irreversible.\')">'
+                . '<input type="hidden" name="action" value="cm_delete_company">'
+                . '<input type="hidden" name="company_id" value="' . intval( $r->id ) . '">'
+                . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                . '<button type="submit" class="button button-small" style="color:#d63638;border-color:#d63638">Eliminar</button>'
+                . '</form>'
+                . '</td></tr>';
         }
         if ( ! $rows ) {
             echo '<tr><td colspan="5">';
@@ -285,8 +298,15 @@ class CMH_Admin {
             . '<h2>' . esc_html( $c->name ) . '</h2>'
             . '<p>Código: <strong>' . esc_html( $c->code ) . '</strong> &nbsp;·&nbsp; '
             . intval( $stats->cities ) . ' ciudades · ' . intval( $stats->machines ) . ' máquinas</p>'
-            . '</div><a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'company_id' => $company_id ] ) ) . '">Exportar máquinas (CSV)</a>'
-            . '</div>';
+            . '</div><div class="cmh-hero-actions">'
+            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'company_id' => $company_id ] ) ) . '">Exportar máquinas (CSV)</a>'
+            . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Eliminar empresa \'+' . json_encode( $c->name ) . '+\' con ' . intval( $stats->cities ) . ' ciudades y ' . intval( $stats->machines ) . ' máquinas? Esta acción es irreversible.\')">'
+            . '<input type="hidden" name="action" value="cm_delete_company">'
+            . '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
+            . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+            . '<button type="submit" class="button" style="color:#d63638;border-color:#d63638">Eliminar empresa</button>'
+            . '</form>'
+            . '</div></div>';
 
         echo '<div class="cmh-layout"><div class="cmh-main"><div class="cmh-panel"><h2>Ciudades / Sucursales</h2>'
             . '<table class="widefat cmh"><thead><tr><th>Ciudad/Sucursal</th><th>Código</th><th>Máquinas</th><th></th></tr></thead><tbody>';
@@ -311,6 +331,14 @@ class CMH_Admin {
             . '<label>Nombre <em>*</em></label><input name="name" placeholder="BOGOTÁ" required class="cmh-uppercase">'
             . '<label>Código <em>*</em></label><input name="code" placeholder="BOG" maxlength="10" required class="cmh-uppercase">'
             . '<button class="button button-primary">Guardar</button></form>';
+        echo '</div><div class="cmh-panel"><h2>Editar empresa</h2>';
+        self::form_start( 'cm_update_company' );
+        echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
+            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ) ) . '">'
+            . '<label>Nombre <em>*</em></label><input name="name" value="' . esc_attr( $c->name ) . '" required class="cmh-uppercase">'
+            . '<label>Código <em>*</em></label><input name="code" value="' . esc_attr( $c->code ) . '" maxlength="10" required class="cmh-uppercase">'
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>'
+            . '<button class="button button-primary">Guardar cambios</button></form>';
         echo '</div></div></div>';
         self::page_footer();
     }
@@ -329,14 +357,29 @@ class CMH_Admin {
             [ 'label' => $city->name ],
         ] );
 
+        $city_machine_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$t['machines']} WHERE city_id=%d", $city_id ) );
         echo '<div class="cmh-layout"><div class="cmh-main">';
-        echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Máquinas en ' . esc_html( $city->name ) . '</h2>'
-            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'city_id' => $city_id ] ) ) . '">Exportar CSV</a></div>';
+        echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Máquinas en ' . esc_html( $city->name ) . '</h2><div style="display:flex;gap:8px;align-items:center">'
+            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'city_id' => $city_id ] ) ) . '">Exportar CSV</a>'
+            . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Eliminar ciudad/sucursal \'+' . json_encode( $city->name ) . '+\' con ' . $city_machine_count . ' máquinas? Esta acción es irreversible.\')">'
+            . '<input type="hidden" name="action" value="cm_delete_city">'
+            . '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
+            . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+            . '<button type="submit" class="button" style="color:#d63638;border-color:#d63638">Eliminar ciudad</button>'
+            . '</form></div></div>';
         self::machines_table( $city_id, 0 );
         echo '</div></div>';
 
         echo '<div class="cmh-side"><div class="cmh-panel"><h2>Agregar máquina</h2>';
         self::machine_form( $city->company_id, $city_id );
+        echo '</div><div class="cmh-panel"><h2>Editar ciudad/sucursal</h2>';
+        self::form_start( 'cm_update_city' );
+        echo '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
+            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] ) ) . '">'
+            . '<label>Nombre <em>*</em></label><input name="name" value="' . esc_attr( $city->name ) . '" required class="cmh-uppercase">'
+            . '<label>Código <em>*</em></label><input name="code" value="' . esc_attr( $city->code ) . '" maxlength="10" required class="cmh-uppercase">'
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>'
+            . '<button class="button button-primary">Guardar cambios</button></form>';
         echo '</div></div></div>';
         self::page_footer();
     }
@@ -499,8 +542,20 @@ class CMH_Admin {
         echo '</div>';
 
         // Tab: Editar
+        $interv_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$t['interventions']} WHERE machine_id=%d", $machine_id ) );
         echo '<div id="tab-editar" class="cmh-tab-panel cmh-panel"><h2>Editar máquina</h2>';
         self::edit_machine_form( $m );
+        echo '<div style="margin-top:28px;padding:16px;border:1px solid #d63638;border-radius:6px">'
+            . '<h3 style="color:#d63638;margin:0 0 8px;font-size:14px">Zona de peligro</h3>'
+            . '<p style="margin:0 0 12px;font-size:13px;color:#646970">Elimina esta máquina y todos sus registros (' . $interv_count . ' intervenciones). Esta acción es irreversible.</p>'
+            . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Eliminar máquina \'+' . json_encode( $m->machine_code ) . '+\' con ' . $interv_count . ' intervenciones? Esta acción es irreversible.\')">'
+            . '<input type="hidden" name="action" value="cm_delete_machine">'
+            . '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $m->city_id ] ) ) . '">'
+            . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+            . '<button type="submit" class="button" style="background:#d63638;border-color:#d63638;color:#fff">Eliminar máquina</button>'
+            . '</form>'
+            . '</div>';
         echo '</div>';
 
         echo '</div><div class="cmh-side">';
@@ -1209,5 +1264,95 @@ class CMH_Admin {
         ) );
         if ( ! $m ) wp_send_json_error( [ 'message' => 'Máquina no encontrada.' ] );
         wp_send_json_success( $m );
+    }
+
+    // =========================================================================
+    // Editar empresa / ciudad
+    // =========================================================================
+
+    public static function update_company() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $id = intval( $_POST['company_id'] );
+        $wpdb->update( $t['companies'], [
+            'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ),
+            'code' => self::clean_code( $_POST['code'] ),
+        ], [ 'id' => $id ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $id ] ), 'Empresa actualizada.' );
+    }
+
+    public static function update_city() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $id   = intval( $_POST['city_id'] );
+        $wpdb->update( $t['cities'], [
+            'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ),
+            'code' => self::clean_code( $_POST['code'] ),
+        ], [ 'id' => $id ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $id ] ), 'Ciudad/Sucursal actualizada.' );
+    }
+
+    // =========================================================================
+    // Eliminar máquina / ciudad / empresa
+    // =========================================================================
+
+    private static function do_delete_machine( $machine_id ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $files = $wpdb->get_results( $wpdb->prepare(
+            "SELECT file_path FROM {$t['files']} WHERE machine_id=%d", $machine_id
+        ) );
+        foreach ( $files as $f ) {
+            if ( $f->file_path && file_exists( $f->file_path ) ) @unlink( $f->file_path );
+        }
+        $wpdb->delete( $t['interventions'], [ 'machine_id' => $machine_id ] );
+        $wpdb->delete( $t['files'],         [ 'machine_id' => $machine_id ] );
+        $wpdb->delete( $t['machines'],      [ 'id'         => $machine_id ] );
+    }
+
+    public static function delete_machine() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $machine_id = intval( $_POST['machine_id'] );
+        $m = $wpdb->get_row( $wpdb->prepare( "SELECT city_id FROM {$t['machines']} WHERE id=%d", $machine_id ) );
+        if ( ! $m ) wp_die( 'Máquina no encontrada.' );
+        $city_id = (int) $m->city_id;
+        self::do_delete_machine( $machine_id );
+        self::redirect_to(
+            self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] ),
+            'Máquina eliminada.'
+        );
+    }
+
+    public static function delete_city() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $city_id = intval( $_POST['city_id'] );
+        $city = $wpdb->get_row( $wpdb->prepare( "SELECT company_id FROM {$t['cities']} WHERE id=%d", $city_id ) );
+        if ( ! $city ) wp_die( 'Ciudad no encontrada.' );
+        $company_id = (int) $city->company_id;
+        $machines = $wpdb->get_col( $wpdb->prepare(
+            "SELECT id FROM {$t['machines']} WHERE city_id=%d", $city_id
+        ) );
+        foreach ( $machines as $mid ) self::do_delete_machine( (int) $mid );
+        $wpdb->delete( $t['cities'], [ 'id' => $city_id ] );
+        self::redirect_to(
+            self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ),
+            'Ciudad/Sucursal eliminada.'
+        );
+    }
+
+    public static function delete_company() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $company_id = intval( $_POST['company_id'] );
+        if ( ! $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['companies']} WHERE id=%d", $company_id ) ) )
+            wp_die( 'Empresa no encontrada.' );
+        $cities = $wpdb->get_col( $wpdb->prepare(
+            "SELECT id FROM {$t['cities']} WHERE company_id=%d", $company_id
+        ) );
+        foreach ( $cities as $cid ) {
+            $machines = $wpdb->get_col( $wpdb->prepare(
+                "SELECT id FROM {$t['machines']} WHERE city_id=%d", (int) $cid
+            ) );
+            foreach ( $machines as $mid ) self::do_delete_machine( (int) $mid );
+            $wpdb->delete( $t['cities'], [ 'id' => (int) $cid ] );
+        }
+        $wpdb->delete( $t['companies'], [ 'id' => $company_id ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-companies' ), 'Empresa eliminada.' );
     }
 }

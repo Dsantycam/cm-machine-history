@@ -1,6 +1,6 @@
 # CM Machine History — Plan maestro del proyecto
 
-**Versión actual:** 0.8.4  
+**Versión actual:** 0.8.5  
 **Autor:** Santiago Camacho — santiagocamachomkt.com  
 **Repositorio:** https://github.com/Dsantycam/cm-machine-history  
 **Última actualización de este documento:** 2026-06-01
@@ -489,6 +489,15 @@ El endpoint `cmh_get_machine` es público (`nopriv`) para que funcione sin login
 - Mapa completo: evaluación → evaluacion, remisión → preventivo, preventivo → preventivo
 - Prioridad: si hay múltiples seleccionados y uno es "correctivo", siempre gana avería
 - **Fix `flatten_submission_data`** — ahora captura campos `checkbox`, `radio` y `select` (antes se ignoraban)
+
+### ✅ v0.8.5 — Borrar entidades + editar empresa/ciudad + fix PDF retry
+
+- **Eliminar máquina** — botón "Zona de peligro" en tab Editar de hoja de vida; borra intervenciones, archivos en disco y registro de BD en cascada
+- **Eliminar ciudad/sucursal** — botón en toolbar de la página de ciudad; borra todas sus máquinas en cascada
+- **Eliminar empresa** — botón en hero de página de empresa y en la lista de empresas; borra todo en cascada
+- **Editar empresa** — nuevo panel en la página de empresa para modificar nombre y código
+- **Editar ciudad/sucursal** — nuevo panel en la página de ciudad para modificar nombre y código
+- **Fix retry de PDF**: el reintento programado a los 90 s ahora copia el PDF si el registro anterior apunta a una URL de E2PDF (no a nuestra copia permanente). Antes retornaba temprano aunque el archivo no hubiera sido copiado.
 
 ### ✅ v0.8.4 — Fix duplicados en error de formulario
 - `forminator_form_after_handle_submit` disparaba incluso cuando el formulario tenía errores de validación, creando intervenciones fantasma
