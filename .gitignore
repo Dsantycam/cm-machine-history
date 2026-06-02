@@ -1,4 +1,5 @@
 # Archivos de desarrollo y documentación (no forman parte del plugin)
+PLAN.md
 *.xlsx
 *.pdf
 desktop.ini
