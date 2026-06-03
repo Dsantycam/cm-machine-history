@@ -83,9 +83,25 @@ class CMH_Admin {
 
     public static function brand_code( $brand ) {
         static $map = [
-            'TOYOTA' => 'TY', 'CROWN' => 'CR', 'HYSTER' => 'HY', 'HANGCHA' => 'HC',
-            'YALE' => 'YA', 'LINDE' => 'LD', 'KOMATSU' => 'KM', 'NISSAN' => 'NS',
-            'CATERPILLAR' => 'CAT', 'MITSUBISHI' => 'MI', 'STILL' => 'ST', 'JUNGHEINRICH' => 'JH',
+            'TOYOTA'       => 'TY',
+            'CATERPILLAR'  => 'CT', 'CAT'          => 'CT',
+            'NISSAN'       => 'NI',
+            'YALE'         => 'YT',
+            'CROWN'        => 'CR',
+            'HYSTER'       => 'HY',
+            'LINDE'        => 'LI',
+            'EQUIPMENT'    => 'EP',
+            'JUNGHEINRICH' => 'JH', 'JUNG'         => 'JH',
+            'HANGCHA'      => 'HG',
+            'HELI'         => 'HI',
+            'JLG'          => 'JL',
+            'KOMATSU'      => 'KO',
+            'UNICARRIERS'  => 'UN',
+            'RAYMOND'      => 'RA',
+            'GENIE'        => 'GN', 'GENNIE'       => 'GN',
+            'MITSUBISHI'   => 'MB', 'MITSU'        => 'MB',
+            'TCM'          => 'TC',
+            'STILL'        => 'ST',
         ];
         $b = strtoupper( trim( remove_accents( $brand ) ) );
         return $map[ $b ] ?? substr( self::clean_code( $brand ), 0, 3 );
@@ -309,7 +325,7 @@ class CMH_Admin {
         echo '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies' ) ) . '">'
             . '<label>Nombre <em>*</em></label><input name="name" required class="cmh-uppercase">'
             . '<label>Código corto <em>*</em></label><input name="code" placeholder="APC" maxlength="10" required class="cmh-uppercase">'
-            . '<p style="font-size:12px;color:#646970;margin:6px 0">Se usará en el código: <strong>APC BOG TY No.001</strong></p>'
+            . '<p style="font-size:12px;color:#646970;margin:6px 0">Se usará en el código: <strong>APC BOG TY No. 001</strong></p>'
             . '<button class="button button-primary">Guardar empresa</button></form>';
         echo '</div></div></div>';
         self::page_footer();
@@ -700,7 +716,7 @@ class CMH_Admin {
         $company  = $wpdb->get_row( $wpdb->prepare( "SELECT code FROM {$t['companies']} WHERE id=%d", $company_id ) );
         $city     = $wpdb->get_row( $wpdb->prepare( "SELECT code FROM {$t['cities']}    WHERE id=%d", $city_id ) );
         $redirect = self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] );
-        $example  = ( $company && $city ) ? $company->code . ' ' . $city->code . ' TY No.001' : 'EMP CIU TY No.001';
+        $example  = ( $company && $city ) ? $company->code . ' ' . $city->code . ' TY No. 001' : 'EMP CIU TY No. 001';
 
         self::form_start( 'cm_save_machine' );
         echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
@@ -1043,7 +1059,7 @@ class CMH_Admin {
                 '', 'El N.º de máquina no puede estar vacío.'
             );
         }
-        $machine_code = $company->code . ' ' . $city->code . ' ' . $brand_code . ' No.' . $machine_num;
+        $machine_code = $company->code . ' ' . $city->code . ' ' . $brand_code . ' No. ' . $machine_num;
 
         if ( $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['machines']} WHERE machine_code=%s", $machine_code ) ) ) {
             self::redirect_to(
