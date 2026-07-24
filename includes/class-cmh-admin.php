@@ -28,6 +28,11 @@ class CMH_Admin {
         add_action( 'admin_post_cm_delete_machine',    [ __CLASS__, 'delete_machine' ] );
         add_action( 'admin_post_cm_delete_city',       [ __CLASS__, 'delete_city' ] );
         add_action( 'admin_post_cm_delete_company',    [ __CLASS__, 'delete_company' ] );
+        add_action( 'admin_post_cm_assign_tech',       [ __CLASS__, 'assign_tech' ] );
+        add_action( 'admin_post_cm_unassign_tech',     [ __CLASS__, 'unassign_tech' ] );
+        add_action( 'admin_post_cm_save_task',         [ __CLASS__, 'save_task' ] );
+        add_action( 'admin_post_cm_update_task',       [ __CLASS__, 'update_task' ] );
+        add_action( 'admin_post_cm_delete_task',       [ __CLASS__, 'delete_task' ] );
         add_action( 'wp_ajax_cmh_get_machine',         [ __CLASS__, 'ajax_get_machine' ] );
         add_action( 'wp_ajax_nopriv_cmh_get_machine',  [ __CLASS__, 'ajax_get_machine_public' ] );
     }
@@ -42,7 +47,7 @@ class CMH_Admin {
     }
 
     public static function assets( $hook ) {
-        if ( strpos( $hook, CMH_SLUG ) === false ) return;
+        if ( strpos( $hook, CMH_SLUG ) === false && strpos( $hook, 'cmh-tech' ) === false ) return;
         wp_enqueue_style(  'cmh-admin', CMH_URL . 'assets/admin.css', [],          CMH_VERSION );
         wp_enqueue_script( 'cmh-admin', CMH_URL . 'assets/admin.js',  [ 'jquery' ], CMH_VERSION, true );
 
@@ -572,6 +577,7 @@ class CMH_Admin {
             . '<a href="#tab-interv"   class="cmh-tab" data-tab="interv">Intervenciones (' . intval( $stats->total ) . ')</a>'
             . '<a href="#tab-disponib" class="cmh-tab" data-tab="disponib">Disponibilidad</a>'
             . '<a href="#tab-pdfs"     class="cmh-tab" data-tab="pdfs">PDFs</a>'
+            . '<a href="#tab-tecnicos" class="cmh-tab" data-tab="tecnicos">Técnicos</a>'
             . '<a href="#tab-editar"   class="cmh-tab" data-tab="editar">Editar</a>'
             . '</div>';
 
@@ -608,6 +614,11 @@ class CMH_Admin {
         // Tab: PDFs
         echo '<div id="tab-pdfs" class="cmh-tab-panel cmh-panel"><h2>Archivos y PDFs</h2>';
         self::files_table( $machine_id );
+        echo '</div>';
+
+        // Tab: Técnicos (v0.9)
+        echo '<div id="tab-tecnicos" class="cmh-tab-panel cmh-panel"><h2>Técnicos y tareas</h2>';
+        self::machine_techs_tab( $machine_id );
         echo '</div>';
 
         // Tab: Editar
@@ -1475,5 +1486,197 @@ class CMH_Admin {
         }
         $wpdb->delete( $t['companies'], [ 'id' => $company_id ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-companies' ), 'Empresa eliminada.' );
+    }
+
+    // =========================================================================
+    // v0.9 — Técnicos: asignaciones y tareas (lado admin)
+    // =========================================================================
+
+    /** Render del tab "Técnicos" en la hoja de vida de la máquina. */
+    private static function machine_techs_tab( $machine_id ) {
+        $technicians = CMH_Tech::technicians();
+        $assigned    = CMH_Tech::machine_techs( $machine_id );
+        $assigned_ids = wp_list_pluck( $assigned, 'ID' );
+        $back        = self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] );
+
+        // ── Asignaciones ──────────────────────────────────────────────────────
+        echo '<h3 style="margin:0 0 10px;font-size:14px">Técnicos asignados</h3>';
+        if ( ! $technicians ) {
+            echo '<div class="cmh-note" style="margin:0 0 16px">No hay usuarios con rol <strong>Técnico (CM)</strong>. '
+                . 'Crea usuarios en <a href="' . esc_url( admin_url( 'user-new.php' ) ) . '">Usuarios → Añadir nuevo</a> y asígnales el rol «Técnico (CM)».</div>';
+        }
+
+        if ( $assigned ) {
+            echo '<table class="widefat cmh" style="margin-bottom:14px"><thead><tr><th>Técnico</th><th>Email</th><th></th></tr></thead><tbody>';
+            foreach ( $assigned as $u ) {
+                echo '<tr><td><strong>' . esc_html( $u->display_name ) . '</strong></td>'
+                    . '<td style="font-size:12px;color:#646970">' . esc_html( $u->user_email ) . '</td>'
+                    . '<td><form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Quitar la asignación de este técnico?\')">'
+                    . '<input type="hidden" name="action" value="cm_unassign_tech">'
+                    . '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+                    . '<input type="hidden" name="user_id" value="' . intval( $u->ID ) . '">'
+                    . '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">'
+                    . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                    . '<button class="button button-small" style="color:#d63638;border-color:#d63638">Quitar</button>'
+                    . '</form></td></tr>';
+            }
+            echo '</tbody></table>';
+        } else {
+            echo '<p style="color:#646970;font-size:13px;margin:0 0 14px">Ningún técnico asignado todavía.</p>';
+        }
+
+        // Asignar un técnico (los que aún no están asignados).
+        $available = array_filter( $technicians, function ( $u ) use ( $assigned_ids ) {
+            return ! in_array( $u->ID, $assigned_ids, true );
+        } );
+        if ( $available ) {
+            self::form_start( 'cm_assign_tech' );
+            echo '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+                . '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">'
+                . '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:6px">'
+                . '<label style="margin:0">Asignar técnico<select name="user_id" required style="min-width:220px">'
+                . '<option value="">— Seleccionar —</option>';
+            foreach ( $available as $u )
+                echo '<option value="' . intval( $u->ID ) . '">' . esc_html( $u->display_name ) . '</option>';
+            echo '</select></label><button class="button button-primary">Asignar</button></div></form>';
+        }
+
+        // ── Tareas ────────────────────────────────────────────────────────────
+        echo '<hr style="margin:22px 0;border:none;border-top:1px solid #e0e0e0">';
+        echo '<h3 style="margin:0 0 10px;font-size:14px">Tareas de mantenimiento</h3>';
+
+        $tasks = CMH_Tech::tasks_for_machine( $machine_id );
+        if ( $tasks ) {
+            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Técnico</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>';
+            foreach ( $tasks as $ta ) {
+                $tech_name = $ta->assigned_to ? get_the_author_meta( 'display_name', $ta->assigned_to ) : '—';
+                echo '<tr>'
+                    . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 24 ) ) . '</span>' : '' ) . '</td>'
+                    . '<td>' . esc_html( $tech_name ?: '—' ) . '</td>'
+                    . '<td>' . esc_html( $ta->due_date ?: '—' ) . '</td>'
+                    . '<td>' . CMH_Tech::task_status_badge( $ta->status ) . '</td>'
+                    . '<td style="display:flex;gap:6px">'
+                    . '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-task-' . intval( $ta->id ) . '">Editar</button>'
+                    . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline" onsubmit="return confirm(\'¿Eliminar esta tarea?\')">'
+                    . '<input type="hidden" name="action" value="cm_delete_task">'
+                    . '<input type="hidden" name="task_id" value="' . intval( $ta->id ) . '">'
+                    . '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+                    . '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">'
+                    . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                    . '<button class="button button-small" style="color:#d63638;border-color:#d63638">Eliminar</button>'
+                    . '</form></td></tr>';
+                // Fila de edición inline
+                echo '<tr id="cmh-task-' . intval( $ta->id ) . '" style="display:none"><td colspan="5" style="background:#f6f7f7">';
+                self::task_form( $machine_id, $back, $ta );
+                echo '</td></tr>';
+            }
+            echo '</tbody></table>';
+        } else {
+            echo '<p style="color:#646970;font-size:13px;margin:0 0 14px">No hay tareas para esta máquina.</p>';
+        }
+
+        // Crear tarea nueva
+        echo '<div style="margin-top:16px;padding:16px;border:1px solid #e0e0e0;border-radius:8px">'
+            . '<h4 style="margin:0 0 10px;font-size:13px">Nueva tarea</h4>';
+        self::task_form( $machine_id, $back );
+        echo '</div>';
+    }
+
+    /**
+     * Formulario de tarea reutilizable: crea (sin $task) o edita (con $task).
+     */
+    private static function task_form( $machine_id, $back, $task = null ) {
+        $is_edit = (bool) $task;
+        self::form_start( $is_edit ? 'cm_update_task' : 'cm_save_task' );
+        echo '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+            . '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">';
+        if ( $is_edit ) echo '<input type="hidden" name="task_id" value="' . intval( $task->id ) . '">';
+
+        echo '<div class="cmh-form-grid">'
+            . '<label>Título <em>*</em><input name="title" value="' . esc_attr( $is_edit ? $task->title : '' ) . '" required></label>'
+            . '<label>Asignar a<select name="assigned_to"><option value="">— Sin asignar —</option>';
+        foreach ( CMH_Tech::technicians() as $u )
+            echo '<option value="' . intval( $u->ID ) . '" ' . selected( $is_edit ? $task->assigned_to : 0, $u->ID, false ) . '>' . esc_html( $u->display_name ) . '</option>';
+        echo '</select></label>'
+            . '<label>Vence<input type="date" name="due_date" value="' . esc_attr( $is_edit ? ( $task->due_date ?: '' ) : '' ) . '"></label>';
+        if ( $is_edit ) {
+            echo '<label>Estado<select name="status">';
+            foreach ( CMH_Tech::TASK_STATUSES as $k => $v )
+                echo '<option value="' . esc_attr( $k ) . '" ' . selected( $task->status, $k, false ) . '>' . esc_html( $v ) . '</option>';
+            echo '</select></label>';
+        }
+        echo '</div>'
+            . '<label>Notas<textarea name="notes">' . ( $is_edit ? esc_textarea( $task->notes ) : '' ) . '</textarea></label>'
+            . '<button class="button button-primary">' . ( $is_edit ? 'Guardar cambios' : 'Crear tarea' ) . '</button></form>';
+    }
+
+    public static function assign_tech() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $machine_id = intval( $_POST['machine_id'] );
+        $user_id    = intval( $_POST['user_id'] );
+        if ( ! $machine_id || ! $user_id ) wp_die( 'Datos incompletos.' );
+        if ( ! user_can( $user_id, 'cmh_tech' ) ) wp_die( 'El usuario no es un técnico válido.' );
+
+        // UNIQUE (machine_id, user_id) evita duplicados; INSERT IGNORE por si acaso.
+        $wpdb->query( $wpdb->prepare(
+            "INSERT IGNORE INTO {$t['assignments']} (machine_id, user_id, created_at) VALUES (%d, %d, %s)",
+            $machine_id, $user_id, current_time( 'mysql' )
+        ) );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Técnico asignado.' );
+    }
+
+    public static function unassign_tech() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $machine_id = intval( $_POST['machine_id'] );
+        $user_id    = intval( $_POST['user_id'] );
+        $wpdb->delete( $t['assignments'], [ 'machine_id' => $machine_id, 'user_id' => $user_id ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Asignación eliminada.' );
+    }
+
+    public static function save_task() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $machine_id = intval( $_POST['machine_id'] );
+        $title      = sanitize_text_field( $_POST['title'] ?? '' );
+        if ( ! $machine_id || ! $title ) {
+            self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), '', 'El título de la tarea es obligatorio.' );
+        }
+        $wpdb->insert( $t['tasks'], [
+            'machine_id'  => $machine_id,
+            'assigned_to' => intval( $_POST['assigned_to'] ) ?: null,
+            'title'       => $title,
+            'notes'       => sanitize_textarea_field( $_POST['notes'] ?? '' ),
+            'due_date'    => sanitize_text_field( $_POST['due_date'] ?? '' ) ?: null,
+            'status'      => 'pendiente',
+            'created_by'  => get_current_user_id(),
+        ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea creada.' );
+    }
+
+    public static function update_task() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $task_id    = intval( $_POST['task_id'] );
+        $machine_id = intval( $_POST['machine_id'] );
+        if ( ! $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['tasks']} WHERE id=%d", $task_id ) ) )
+            wp_die( 'Tarea no encontrada.' );
+        $status = sanitize_key( $_POST['status'] ?? 'pendiente' );
+        if ( ! isset( CMH_Tech::TASK_STATUSES[ $status ] ) ) $status = 'pendiente';
+
+        $wpdb->update( $t['tasks'], [
+            'title'       => sanitize_text_field( $_POST['title'] ),
+            'assigned_to' => intval( $_POST['assigned_to'] ) ?: null,
+            'notes'       => sanitize_textarea_field( $_POST['notes'] ?? '' ),
+            'due_date'    => sanitize_text_field( $_POST['due_date'] ?? '' ) ?: null,
+            'status'      => $status,
+            'updated_at'  => current_time( 'mysql' ),
+        ], [ 'id' => $task_id ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea actualizada.' );
+    }
+
+    public static function delete_task() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $task_id    = intval( $_POST['task_id'] );
+        $machine_id = intval( $_POST['machine_id'] );
+        $wpdb->delete( $t['tasks'], [ 'id' => $task_id ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea eliminada.' );
     }
 }
