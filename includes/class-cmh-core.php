@@ -18,6 +18,8 @@ class CMH_Core {
             'interventions' => $p . 'interventions',
             'files'         => $p . 'files',
             'logs'          => $p . 'logs',
+            'assignments'   => $p . 'assignments',
+            'tasks'         => $p . 'tasks',
         ];
     }
 
@@ -142,10 +144,68 @@ class CMH_Core {
             KEY intervention_id (intervention_id)
         ) $c;" );
 
+        // v0.9 — Asignaciones técnico ↔ máquina.
+        dbDelta( "CREATE TABLE {$t['assignments']} (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            machine_id BIGINT UNSIGNED NOT NULL,
+            user_id    BIGINT UNSIGNED NOT NULL,
+            created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY machine_user (machine_id, user_id),
+            KEY machine_id (machine_id),
+            KEY user_id (user_id)
+        ) $c;" );
+
+        // v0.9 — Tareas de mantenimiento asignadas a técnicos.
+        dbDelta( "CREATE TABLE {$t['tasks']} (
+            id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            machine_id  BIGINT UNSIGNED NOT NULL,
+            assigned_to BIGINT UNSIGNED NULL,
+            title       VARCHAR(190)    NOT NULL,
+            notes       TEXT            NULL,
+            due_date    DATE            NULL,
+            status      VARCHAR(40)     NOT NULL DEFAULT 'pendiente',
+            created_by  BIGINT UNSIGNED NULL,
+            created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at  DATETIME        NULL,
+            PRIMARY KEY (id),
+            KEY machine_id (machine_id),
+            KEY assigned_to (assigned_to),
+            KEY status (status)
+        ) $c;" );
+
         // Migrar branch_id a nullable en instalaciones existentes.
         self::run_migrations( $t );
 
+        // v0.9 — Rol de técnico y capacidades.
+        self::setup_roles();
+
         update_option( 'cmh_version', CMH_VERSION );
+    }
+
+    /**
+     * v0.9 — Crea el rol `cmh_technician` y reparte la capacidad `cmh_tech`.
+     *
+     * - `cmh_technician`: puede entrar a wp-admin (read) y ver el panel del técnico (cmh_tech).
+     *   NO recibe `edit_others_posts`, por lo que no ve el menú de administración completo.
+     * - `administrator`: recibe `cmh_tech` para poder previsualizar el panel del técnico.
+     *
+     * Idempotente: seguro de ejecutar en cada upgrade.
+     */
+    public static function setup_roles() {
+        if ( ! get_role( 'cmh_technician' ) ) {
+            add_role( 'cmh_technician', 'Técnico (CM)', [
+                'read'     => true,
+                'cmh_tech' => true,
+            ] );
+        } else {
+            $role = get_role( 'cmh_technician' );
+            $role->add_cap( 'read' );
+            $role->add_cap( 'cmh_tech' );
+        }
+
+        $admin = get_role( 'administrator' );
+        if ( $admin ) $admin->add_cap( 'cmh_tech' );
     }
 
     /** Ejecuta migraciones específicas de versión. */
