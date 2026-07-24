@@ -22,6 +22,8 @@ class CMH_Admin {
         add_action( 'admin_post_cm_update_machine',    [ __CLASS__, 'update_machine' ] );
         add_action( 'admin_post_cm_export_csv',        [ __CLASS__, 'export_csv' ] );
         add_action( 'admin_post_cm_edit_intervention', [ __CLASS__, 'edit_intervention' ] );
+        add_action( 'admin_post_cm_schedule_maintenance', [ __CLASS__, 'schedule_maintenance' ] );
+        add_action( 'admin_post_cm_find_pdf',          [ __CLASS__, 'find_pdf_now' ] );
         add_action( 'admin_post_cm_update_company',    [ __CLASS__, 'update_company' ] );
         add_action( 'admin_post_cm_update_city',       [ __CLASS__, 'update_city' ] );
         add_action( 'admin_post_cm_delete_intervention', [ __CLASS__, 'delete_intervention' ] );
@@ -524,7 +526,7 @@ class CMH_Admin {
         self::page_header( $m->machine_code, $crumbs );
 
         $stats = $wpdb->get_row( $wpdb->prepare(
-            "SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN affects_availability=1 THEN downtime_hours ELSE 0 END),0) downtime_averia, COALESCE(SUM(CASE WHEN affects_availability=0 THEN downtime_hours ELSE 0 END),0) downtime_maintenance, COALESCE(SUM(cost),0) cost, SUM(CASE WHEN maintenance_type='preventivo' THEN 1 ELSE 0 END) preventivos, SUM(CASE WHEN maintenance_type IN('correctivo','averia') THEN 1 ELSE 0 END) correctivos FROM {$t['interventions']} WHERE machine_id=%d",
+            "SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN affects_availability=1 THEN downtime_hours ELSE 0 END),0) downtime_averia, COALESCE(SUM(CASE WHEN affects_availability=0 THEN downtime_hours ELSE 0 END),0) downtime_maintenance, COALESCE(SUM(cost),0) cost, COALESCE(SUM(CASE WHEN cost>paid_amount THEN cost-paid_amount ELSE 0 END),0) por_cobrar, SUM(CASE WHEN maintenance_type='preventivo' THEN 1 ELSE 0 END) preventivos, SUM(CASE WHEN maintenance_type IN('correctivo','averia') THEN 1 ELSE 0 END) correctivos FROM {$t['interventions']} WHERE machine_id=%d",
             $machine_id
         ) );
         $last = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['interventions']} WHERE machine_id=%d ORDER BY intervention_date DESC, id DESC LIMIT 1", $machine_id ) );
@@ -560,10 +562,25 @@ class CMH_Admin {
             . $maint_badge . '</h2>'
             . '<p>' . esc_html( $loc ) . ' &nbsp;·&nbsp; ' . esc_html( trim( $m->brand . ' ' . $m->model ) ) . '</p>'
             . '</div><div class="cmh-hero-actions">'
+            . '<button type="button" class="button button-primary cmh-btn-toggle-edit" data-target="cmh-schedule-box"><span class="dashicons dashicons-calendar-alt" style="vertical-align:middle;margin-top:-2px"></span> Programar mantenimiento</button>'
             . '<a class="button cmh-btn-print" href="#">Imprimir hoja de vida</a>'
             . '<a class="button" href="' . esc_url( self::export_nonce_url( 'interventions', [ 'machine_id' => $machine_id ] ) ) . '">Exportar intervenciones (CSV)</a>'
             . '<a class="button" href="' . esc_url( $m->branch_id ? self::admin_url( CMH_SLUG . '-companies', [ 'branch_id' => $m->branch_id ] ) : self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $m->city_id ] ) ) . '">Volver</a>'
             . '</div></div>';
+
+        // Programar mantenimiento — formulario rápido (sin registrar intervención).
+        echo '<div id="cmh-schedule-box" class="cmh-panel" style="display:none;border-left:4px solid #2271b1">'
+            . '<h2 style="margin-top:0">Programar próximo mantenimiento</h2>'
+            . '<p style="font-size:13px;color:#646970;margin:-6px 0 12px">Solo fija la fecha del próximo mantenimiento de esta máquina. No crea una intervención.</p>';
+        self::form_start( 'cm_schedule_maintenance' );
+        echo '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ) ) . '">'
+            . '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">'
+            . '<label style="margin:0">Fecha del próximo mantenimiento'
+            . '<input type="date" name="next_maintenance_date" value="' . esc_attr( $m->next_maintenance_date ?: '' ) . '" min="' . esc_attr( current_time( 'Y-m-d' ) ) . '" required></label>'
+            . '<button class="button button-primary">Guardar fecha</button>'
+            . ( $m->next_maintenance_date ? '<button type="submit" name="clear_date" value="1" formnovalidate class="button" style="color:#d63638;border-color:#d63638">Quitar fecha</button>' : '' )
+            . '</div></form></div>';
 
         // KPIs
         echo '<div class="cmh-grid">';
@@ -574,6 +591,7 @@ class CMH_Admin {
         self::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ), CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc );
         self::metric_card( 'MTTR',              CMH_Metrics::fmt_mttr( $mttr_all ),                                    'historial',         'warn' );
         self::metric_card( 'Costo total',       '$' . number_format( (float)$stats->cost, 0, ',', '.' ),              'historial',         'blue' );
+        self::metric_card( 'Por cobrar',        '$' . number_format( (float)$stats->por_cobrar, 0, ',', '.' ),        'saldo pendiente',   (float)$stats->por_cobrar > 0 ? 'warn' : 'ok' );
         self::metric_card( 'Horómetro',         number_format( (float)$m->current_hourmeter, 2, ',', '.' ) . ' h',   'actual',            'blue' );
         echo '</div>';
 
@@ -793,8 +811,9 @@ class CMH_Admin {
         );
         if ( ! $rows ) { self::empty_state( 'dashicons-calendar-alt', 'Sin intervenciones', 'Aún no hay registros.' ); return; }
 
-        echo '<table class="widefat cmh"><thead><tr><th>Fecha</th><th>Máquina</th><th>Tipo</th><th>Técnico</th><th>H. parada</th><th>Costo</th><th>PDF</th></tr></thead><tbody>';
+        echo '<table class="widefat cmh"><thead><tr><th>Fecha</th><th>Máquina</th><th>Tipo</th><th>Técnico</th><th>H. parada</th><th>Costo</th><th>Pago</th><th>PDF</th></tr></thead><tbody>';
         foreach ( $rows as $r ) {
+            $pay = self::payment_badge( $r->payment_status, $r->cost, $r->paid_amount );
             echo '<tr>'
                 . '<td>' . esc_html( $r->intervention_date ) . '</td>'
                 . '<td>' . esc_html( $r->machine_code ) . '</td>'
@@ -802,6 +821,7 @@ class CMH_Admin {
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td>' . esc_html( $r->downtime_hours ) . ' h</td>'
                 . '<td>$' . number_format( (float) $r->cost, 0, ',', '.' ) . '</td>'
+                . '<td>' . ( $pay ?: '—' ) . '</td>'
                 . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>' : '—' ) . '</td>'
                 . '</tr>';
         }
@@ -816,6 +836,40 @@ class CMH_Admin {
         $label  = $labels[ $key ] ?? ucfirst( $type );
         $style  = $color ? "background:var(--cmh-{$color}-light);color:#1d2327;" : '';
         return '<span class="cmh-badge" style="' . $style . '">' . esc_html( $label ) . '</span>';
+    }
+
+    /** Estados de pago disponibles. */
+    public static function payment_statuses() {
+        return [ 'pendiente' => 'Pendiente', 'parcial' => 'Parcial', 'pagado' => 'Pagado' ];
+    }
+
+    /** Valida el estado de pago recibido; si no es válido, lo deriva de costo/abonado. */
+    public static function sanitize_payment_status( $status, $cost, $paid ) {
+        $status = sanitize_key( $status );
+        return isset( self::payment_statuses()[ $status ] ) ? $status : self::derive_payment_status( $cost, $paid );
+    }
+
+    /** Deriva el estado de pago a partir del costo y lo abonado. */
+    public static function derive_payment_status( $cost, $paid ) {
+        $cost = (float) $cost; $paid = (float) $paid;
+        if ( $cost <= 0 ) return $paid > 0 ? 'pagado' : 'pendiente';
+        if ( $paid >= $cost ) return 'pagado';
+        if ( $paid > 0 )      return 'parcial';
+        return 'pendiente';
+    }
+
+    /** Badge de estado de pago con saldo. Vacío si no hay costo ni abono (no aplica). */
+    public static function payment_badge( $status, $cost = 0, $paid = 0 ) {
+        $cost = (float) $cost; $paid = (float) $paid;
+        if ( $cost <= 0 && $paid <= 0 ) return '';
+        $status = $status ?: self::derive_payment_status( $cost, $paid );
+        $styles = [ 'pendiente' => 'background:#fce8e8;color:#d63638', 'parcial' => 'background:#fff3cd;color:#7a4f00', 'pagado' => 'background:#e6f4ea;color:#1a6630' ];
+        $labels = self::payment_statuses();
+        $style  = $styles[ $status ] ?? 'background:#f0f0f1;color:#3c434a';
+        $label  = $labels[ $status ] ?? ucfirst( $status );
+        $saldo  = max( 0, $cost - $paid );
+        $extra  = ( $status !== 'pagado' && $saldo > 0 ) ? ' <span style="color:#646970;font-size:11px">Saldo $' . number_format( $saldo, 0, ',', '.' ) . '</span>' : '';
+        return '<span class="cmh-badge" style="' . $style . '">' . esc_html( $label ) . '</span>' . $extra;
     }
 
     public static function intervention_cards( $machine_id ) {
@@ -847,18 +901,30 @@ class CMH_Admin {
                 . '<div class="cmh-timeline-card ' . $cc . '">'
                 . '<div class="cmh-timeline-head">'
                 . '<strong>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type )
-                . ( $r->affects_availability ? ' <span class="cmh-badge cmh-badge-averia">Descuenta disponibilidad</span>' : '' ) . '</strong>'
+                . ( $r->affects_availability ? ' <span class="cmh-badge cmh-badge-averia">Descuenta disponibilidad</span>' : '' )
+                . ( self::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) ? ' ' . self::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) : '' )
+                . '</strong>'
                 . '<time>' . esc_html( $r->intervention_date ) . '</time></div>'
                 . '<div class="cmh-meta">'
                 . '<span>Técnico: ' . esc_html( $r->technician ?: '—' ) . '</span>'
                 . '<span>H: ' . esc_html( $r->hourmeter ) . '</span>'
                 . '<span>Parada: ' . esc_html( $r->downtime_hours ) . ' h</span>'
+                . ( (float) $r->cost > 0 ? '<span>Costo: $' . number_format( (float) $r->cost, 0, ',', '.' ) . '</span>' : '' )
                 . ( $r->failure_system ? '<span>' . esc_html( ucfirst( $r->failure_system ) ) . '</span>' : '' )
                 . '</div>';
             if ( $r->services )     echo '<p><strong>Servicios:</strong> '     . esc_html( wp_trim_words( $r->services,     32 ) ) . '</p>';
             if ( $r->observations ) echo '<p><strong>Observaciones:</strong> ' . esc_html( wp_trim_words( $r->observations, 32 ) ) . '</p>';
             echo '<div class="cmh-card-actions">';
-            if ( $r->file_url ) echo '<a class="button button-small" target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>';
+            if ( $r->file_url ) {
+                echo '<a class="button button-small" target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>';
+            } else {
+                echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline">'
+                    . '<input type="hidden" name="action" value="cm_find_pdf">'
+                    . '<input type="hidden" name="intervention_id" value="' . intval( $r->id ) . '">'
+                    . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                    . '<button type="submit" class="button button-small" title="Busca el PDF generado por E2PDF y lo asocia a esta intervención">Buscar PDF</button>'
+                    . '</form>';
+            }
             echo '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-edit-' . intval( $r->id ) . '">Editar</button>';
             echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline" onsubmit="return confirm(\'¿Eliminar esta intervención? La acción es irreversible.\')">'
                 . '<input type="hidden" name="action" value="cm_delete_intervention">'
@@ -881,6 +947,11 @@ class CMH_Admin {
                 . '<label>Técnico<input name="technician" value="' . esc_attr( $r->technician ) . '"></label>'
                 . '<label>Horas parada' . ( $r->worked_hours > 0 ? ' <small style="color:#646970">(H. trabajadas: ' . esc_html( $r->worked_hours ) . ' h)</small>' : '' ) . '<input type="number" step="0.01" name="downtime_hours" value="' . esc_attr( $r->downtime_hours ) . '" min="0" placeholder="' . esc_attr( $r->worked_hours > 0 ? $r->worked_hours : '0' ) . '"></label>'
                 . '<label>Costo<input type="number" step="100" name="cost" value="' . esc_attr( $r->cost ) . '" min="0"></label>'
+                . '<label>Estado de pago<select name="payment_status">';
+            foreach ( self::payment_statuses() as $k => $v )
+                echo '<option value="' . esc_attr( $k ) . '" ' . selected( $r->payment_status, $k, false ) . '>' . esc_html( $v ) . '</option>';
+            echo '</select></label>'
+                . '<label>Monto abonado<input type="number" step="100" name="paid_amount" value="' . esc_attr( $r->paid_amount ) . '" min="0"></label>'
                 . '</div>'
                 . '<label><input type="checkbox" name="affects_availability" value="1" ' . checked( $r->affects_availability, 1, false ) . '> Afecta disponibilidad</label>'
                 . '<label style="display:block;margin-top:8px">Observaciones<textarea name="observations">' . esc_textarea( $r->observations ) . '</textarea></label>'
@@ -953,11 +1024,20 @@ class CMH_Admin {
         echo '<div class="cmh-form-section">'
             . '<p class="cmh-form-section-title">Datos adicionales</p>'
             . '<label>Horas trabajadas</label><input type="number" step="0.01" name="worked_hours" value="0" min="0">'
-            . '<label>Costo</label><input type="number" step="100" name="cost" value="0" min="0">'
+            . '<label>Costo</label><input type="number" step="100" name="cost" id="cmh-cost-input" value="0" min="0">'
             . '<div id="cmh-av-row">'
             . '<label><input type="checkbox" name="affects_availability" value="1"> Afecta disponibilidad'
             . ' <span class="cmh-auto-note" style="display:none;color:#2271b1;font-size:11px">(automático según tipo)</span></label>'
             . '</div></div>';
+
+        echo '<div class="cmh-form-section cmh-payment-section">'
+            . '<p class="cmh-form-section-title">Pago</p>'
+            . '<label>Estado de pago</label><select name="payment_status" id="cmh-payment-status">';
+        foreach ( self::payment_statuses() as $k => $v ) echo '<option value="' . esc_attr( $k ) . '">' . esc_html( $v ) . '</option>';
+        echo '</select>'
+            . '<label>Monto abonado</label><input type="number" step="100" name="paid_amount" id="cmh-paid-input" value="0" min="0">'
+            . '<p id="cmh-saldo-hint" style="font-size:12px;color:#646970;margin:6px 0 0">Saldo = costo − abonado.</p>'
+            . '</div>';
 
         // Estado automático (V0.8)
         echo '<div class="cmh-form-section" id="cmh-status-row">'
@@ -1128,6 +1208,8 @@ class CMH_Admin {
             'maintenance_type'     => $mtype, 'technician' => sanitize_text_field( $_POST['technician'] ),
             'hourmeter'            => $hourmeter, 'worked_hours' => floatval( $_POST['worked_hours'] ),
             'downtime_hours'       => floatval( $_POST['downtime_hours'] ), 'cost' => floatval( $_POST['cost'] ),
+            'payment_status'       => self::sanitize_payment_status( $_POST['payment_status'] ?? '', $_POST['cost'] ?? 0, $_POST['paid_amount'] ?? 0 ),
+            'paid_amount'          => floatval( $_POST['paid_amount'] ?? 0 ),
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
             'failure_system'       => sanitize_text_field( $_POST['failure_system'] ),
             'parts'                => sanitize_textarea_field( $_POST['parts'] ),
@@ -1291,11 +1373,11 @@ class CMH_Admin {
         $machine_id = intval( $_GET['machine_id'] ?? 0 );
         $where  = $machine_id ? $wpdb->prepare( 'WHERE i.machine_id=%d', $machine_id ) : '';
         $rows   = $wpdb->get_results(
-            "SELECT i.intervention_date, m.machine_code, i.maintenance_type, i.form_type, i.technician, i.hourmeter, i.worked_hours, i.downtime_hours, i.affects_availability, i.failure_system, i.cost, i.parts, i.services, i.observations FROM {$t['interventions']} i LEFT JOIN {$t['machines']} m ON m.id=i.machine_id $where ORDER BY i.intervention_date DESC, i.id DESC",
+            "SELECT i.intervention_date, m.machine_code, i.maintenance_type, i.form_type, i.technician, i.hourmeter, i.worked_hours, i.downtime_hours, i.affects_availability, i.failure_system, i.cost, i.payment_status, i.paid_amount, (i.cost - i.paid_amount) saldo, i.parts, i.services, i.observations FROM {$t['interventions']} i LEFT JOIN {$t['machines']} m ON m.id=i.machine_id $where ORDER BY i.intervention_date DESC, i.id DESC",
             ARRAY_A
         );
         self::csv_headers( 'intervenciones-' . date( 'Y-m-d' ) . '.csv' );
-        self::csv_row( [ 'Fecha', 'Máquina', 'Tipo', 'Formato', 'Técnico', 'Horómetro', 'H.Trabajadas', 'H.Parada', 'Afecta Disp.', 'Sistema/Falla', 'Costo', 'Repuestos', 'Servicios', 'Observaciones' ] );
+        self::csv_row( [ 'Fecha', 'Máquina', 'Tipo', 'Formato', 'Técnico', 'Horómetro', 'H.Trabajadas', 'H.Parada', 'Afecta Disp.', 'Sistema/Falla', 'Costo', 'Estado pago', 'Abonado', 'Saldo', 'Repuestos', 'Servicios', 'Observaciones' ] );
         foreach ( $rows as $r ) self::csv_row( array_values( $r ) );
         exit;
     }
@@ -1340,11 +1422,55 @@ class CMH_Admin {
             'technician'           => sanitize_text_field( $_POST['technician'] ),
             'downtime_hours'       => floatval( $_POST['downtime_hours'] ),
             'cost'                 => floatval( $_POST['cost'] ),
+            'payment_status'       => self::sanitize_payment_status( $_POST['payment_status'] ?? '', $_POST['cost'] ?? 0, $_POST['paid_amount'] ?? 0 ),
+            'paid_amount'          => floatval( $_POST['paid_amount'] ?? 0 ),
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),
         ], [ 'id' => $id ] );
 
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Intervención actualizada.' );
+    }
+
+    // =========================================================================
+    // Programar mantenimiento (rápido, sin intervención)
+    // =========================================================================
+
+    public static function schedule_maintenance() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $machine_id = intval( $_POST['machine_id'] );
+        if ( ! $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['machines']} WHERE id=%d", $machine_id ) ) )
+            wp_die( 'Máquina no encontrada.' );
+
+        if ( ! empty( $_POST['clear_date'] ) ) {
+            $wpdb->update( $t['machines'], [ 'next_maintenance_date' => null, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
+            self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Fecha de mantenimiento eliminada.' );
+        }
+
+        $date = sanitize_text_field( $_POST['next_maintenance_date'] ?? '' );
+        if ( ! $date ) self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), '', 'Indica una fecha para programar el mantenimiento.' );
+
+        $wpdb->update( $t['machines'], [ 'next_maintenance_date' => $date, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Mantenimiento programado para el ' . $date . '.' );
+    }
+
+    // =========================================================================
+    // Buscar/asociar PDF de E2PDF manualmente para una intervención
+    // =========================================================================
+
+    public static function find_pdf_now() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $id = intval( $_POST['intervention_id'] );
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT i.machine_id, m.machine_code FROM {$t['interventions']} i JOIN {$t['machines']} m ON m.id=i.machine_id WHERE i.id=%d", $id
+        ) );
+        if ( ! $row ) wp_die( 'Intervención no encontrada.' );
+
+        CMH_Integration::find_pdf( $id, (int) $row->machine_id, $row->machine_code );
+
+        $has = (bool) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['files']} WHERE intervention_id=%d LIMIT 1", $id ) );
+        $back = self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $row->machine_id ] );
+        if ( $has ) self::redirect_to( $back, 'PDF asociado a la intervención #' . $id . '.' );
+        else        self::redirect_to( $back, '', 'No se encontró un PDF de E2PDF para asociar. Puedes subirlo manualmente con "Anexar PDF / archivo".' );
     }
 
     // =========================================================================

@@ -111,6 +111,34 @@
         syncMtype();
     }
 
+    // ─── Pago — saldo y sugerencia de estado ──────────────────────────────────
+    var $cost    = $('#cmh-cost-input');
+    var $paid    = $('#cmh-paid-input');
+    var $payStat = $('#cmh-payment-status');
+    var $saldoH  = $('#cmh-saldo-hint');
+    var payTouched = false;
+
+    if ($payStat.length) $payStat.on('change', function () { payTouched = true; });
+
+    function syncPayment() {
+        var cost = parseFloat($cost.val()) || 0;
+        var paid = parseFloat($paid.val()) || 0;
+        var saldo = Math.max(0, cost - paid);
+        var derived = (cost <= 0) ? (paid > 0 ? 'pagado' : 'pendiente')
+                    : (paid >= cost ? 'pagado' : (paid > 0 ? 'parcial' : 'pendiente'));
+        if (!payTouched && $payStat.length) $payStat.val(derived);
+        if ($saldoH.length) {
+            $saldoH.text(cost > 0
+                ? 'Saldo: $' + saldo.toLocaleString('es-CO') + ' (costo $' + cost.toLocaleString('es-CO') + ' − abonado $' + paid.toLocaleString('es-CO') + ')'
+                : 'Saldo = costo − abonado.');
+        }
+    }
+    if ($cost.length && $paid.length) {
+        $cost.on('input change', syncPayment);
+        $paid.on('input change', syncPayment);
+        syncPayment();
+    }
+
     // ─── Máquinas — fila completa clickable ───────────────────────────────────
     $(document).on('click', '.cmh-machine-table tbody tr', function (e) {
         if ($(e.target).is('a, button, input')) return;
