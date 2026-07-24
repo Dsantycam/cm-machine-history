@@ -28,6 +28,10 @@ class CMH_Client {
     }
 
     public static function admin_menu() {
+        // "Mis Equipos" es el portal de solo lectura para clientes. Los administradores/
+        // editores gestionan todo desde el menú "Máquinas" y no deben ver este menú.
+        if ( current_user_can( 'edit_others_posts' ) ) return;
+
         add_menu_page(
             'Portal Cliente', 'Mis Equipos', 'cmh_client', 'cmh-client',
             [ __CLASS__, 'page_panel' ], 'dashicons-portfolio', 28

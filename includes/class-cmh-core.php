@@ -103,6 +103,8 @@ class CMH_Core {
             worked_hours         DECIMAL(10,2)   DEFAULT 0,
             downtime_hours       DECIMAL(10,2)   DEFAULT 0,
             cost                 DECIMAL(14,2)   DEFAULT 0,
+            payment_status       VARCHAR(20)     NOT NULL DEFAULT 'pendiente',
+            paid_amount          DECIMAL(14,2)   NOT NULL DEFAULT 0,
             affects_availability TINYINT(1)      NOT NULL DEFAULT 0,
             failure_system       VARCHAR(190)    NULL,
             parts                TEXT            NULL,
@@ -256,6 +258,13 @@ class CMH_Core {
         $col3 = $wpdb->get_row( "SHOW COLUMNS FROM {$t['machines']} LIKE 'next_maintenance_date'" );
         if ( ! $col3 ) {
             $wpdb->query( "ALTER TABLE {$t['machines']} ADD COLUMN next_maintenance_date DATE NULL DEFAULT NULL" );
+        }
+
+        // v0.10.1 — Columnas de control de pago en intervenciones.
+        $colp = $wpdb->get_row( "SHOW COLUMNS FROM {$t['interventions']} LIKE 'payment_status'" );
+        if ( ! $colp ) {
+            $wpdb->query( "ALTER TABLE {$t['interventions']} ADD COLUMN payment_status VARCHAR(20) NOT NULL DEFAULT 'pendiente' AFTER cost" );
+            $wpdb->query( "ALTER TABLE {$t['interventions']} ADD COLUMN paid_amount DECIMAL(14,2) NOT NULL DEFAULT 0 AFTER payment_status" );
         }
     }
 

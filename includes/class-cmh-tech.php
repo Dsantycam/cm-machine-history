@@ -33,6 +33,10 @@ class CMH_Tech {
     }
 
     public static function admin_menu() {
+        // El menú "Mis Máquinas" es solo para técnicos. Los administradores/editores
+        // tienen su propio menú "Máquinas" y no deben ver este panel reducido.
+        if ( current_user_can( 'edit_others_posts' ) ) return;
+
         add_menu_page(
             'Mis Máquinas', 'Mis Máquinas', 'cmh_tech', 'cmh-tech',
             [ __CLASS__, 'page_panel' ], 'dashicons-clipboard', 27

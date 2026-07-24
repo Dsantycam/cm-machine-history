@@ -9,7 +9,7 @@ class CMH_Integration {
     public static function init() {
         add_action( 'forminator_form_after_handle_submit', [ __CLASS__, 'capture_submit' ],    10, 10 );
         add_action( 'forminator_form_after_save_entry',    [ __CLASS__, 'capture_submit' ],    10, 10 );
-        add_action( 'cmh_find_e2pdf_pdf_event',            [ __CLASS__, 'find_pdf' ],          10, 3  );
+        add_action( 'cmh_find_e2pdf_pdf_event',            [ __CLASS__, 'find_pdf' ],          10, 4  );
         add_action( 'wp_enqueue_scripts',                  [ __CLASS__, 'enqueue_frontend' ] );
     }
 
@@ -218,11 +218,18 @@ class CMH_Integration {
         CMH_Core::log( 'success', $form_id, $machine_code, $intervention_id,
             'Intervención creada desde Forminator.', [] );
 
-        self::find_pdf( $intervention_id, (int) $machine->id, $machine_code );
+        // Epoch real del envío (no la fecha de la BD): así la ventana de búsqueda es
+        // inmune a la zona horaria de MySQL y coincide con el mtime real de los archivos.
+        $submitted = time();
+        self::find_pdf( $intervention_id, (int) $machine->id, $machine_code, $submitted );
 
-        if ( ! wp_next_scheduled( 'cmh_find_e2pdf_pdf_event', [ $intervention_id, (int) $machine->id, $machine_code ] ) ) {
-            wp_schedule_single_event( time() + 90, 'cmh_find_e2pdf_pdf_event',
-                [ $intervention_id, (int) $machine->id, $machine_code ] );
+        // Reintentos escalonados: E2PDF puede generar el PDF con retraso y, en sitios
+        // de bajo tráfico, WP-Cron dispara tarde. Programamos varios intentos para que
+        // el PDF quede asociado aunque aparezca minutos después (aplica a todo tipo de
+        // intervención, no solo averías).
+        foreach ( [ 90, 300, 900 ] as $delay ) {
+            wp_schedule_single_event( time() + $delay, 'cmh_find_e2pdf_pdf_event',
+                [ $intervention_id, (int) $machine->id, $machine_code, $submitted ] );
         }
     }
 
@@ -230,7 +237,7 @@ class CMH_Integration {
     // E2PDF — búsqueda y asociación de PDF
     // -------------------------------------------------------------------------
 
-    public static function find_pdf( $intervention_id, $machine_id, $machine_code ) {
+    public static function find_pdf( $intervention_id, $machine_id, $machine_code, $submitted = 0 ) {
         global $wpdb;
         $t = CMH_Core::tables();
 
@@ -249,10 +256,10 @@ class CMH_Integration {
             return;
         }
 
-        $candidate = self::latest_pdf( $base, $machine_code );
+        $candidate = self::latest_pdf( $base, $machine_code, (int) $submitted );
         if ( ! $candidate ) {
             CMH_Core::log( 'warning', null, $machine_code, $intervention_id,
-                'PDF de E2PDF no encontrado en los últimos 15 min. Se reintentará.', [] );
+                'PDF de E2PDF aún no disponible. Se reintentará automáticamente.', [] );
             return;
         }
 
@@ -297,11 +304,36 @@ class CMH_Integration {
             'PDF asociado automáticamente: ' . basename( $candidate ), [] );
     }
 
-    /** Busca el PDF más reciente (últimos 15 min) en uploads/e2pdf, priorizando los que contienen el código de máquina. */
-    private static function latest_pdf( $base, $machine_code ) {
-        $now  = time();
-        $best = null;
-        $top  = -1;
+    /**
+     * Busca el PDF de E2PDF que corresponde a la intervención en uploads/e2pdf.
+     *
+     * Estrategia en dos niveles para no asociar el PDF de otra máquina:
+     *  1. Coincidencia por código de máquina normalizado (sin espacios ni signos): es la
+     *     señal fuerte; se acepta a cualquier hora ≥ la del envío (los reintentos tardíos
+     *     siguen valiendo). Gana el más reciente.
+     *  2. Si ninguno coincide por código, cae al PDF más reciente pero solo dentro de una
+     *     ventana acotada tras el envío (evita robar el PDF de un envío posterior).
+     *
+     * Trabaja con el epoch real del envío (`$submitted`), no con la fecha de la BD, para
+     * ser inmune a la zona horaria de MySQL: `getMTime()` también es epoch real.
+     *
+     * @param string $base         Carpeta uploads/e2pdf.
+     * @param string $machine_code Código de máquina (ej. "APC BOG TY No. 001").
+     * @param int    $submitted    Epoch (time()) del envío. 0 → llamada manual: exige
+     *                             coincidencia por código y mira hasta 30 días atrás.
+     */
+    private static function latest_pdf( $base, $machine_code, $submitted = 0 ) {
+        $norm_code = self::norm_code( $machine_code );
+        $now = time();
+        if ( $submitted > $now ) $submitted = 0; // defensa: nunca un envío en el futuro
+
+        // Cota inferior para considerar archivos (con 2 min de holgura por desfase de reloj).
+        $min_mtime = $submitted ? ( $submitted - 120 ) : ( $now - 30 * DAY_IN_SECONDS );
+        // Ventana del respaldo sin código: solo cuando conocemos la hora del envío.
+        $fallback_max = $submitted ? ( $submitted + 1800 ) : 0;
+
+        $best_code = null; $best_code_m = -1; // mejor coincidencia por código
+        $best_any  = null; $best_any_m  = -1; // mejor respaldo por fecha
 
         try {
             $it = new RecursiveIteratorIterator(
@@ -311,17 +343,24 @@ class CMH_Integration {
                 if ( ! $file->isFile() ) continue;
                 if ( strtolower( $file->getExtension() ) !== 'pdf' ) continue;
                 $mtime = $file->getMTime();
-                if ( $mtime < $now - 900 ) continue;
+                if ( $mtime < $min_mtime ) continue;
 
-                $score = $mtime;
-                $path  = $file->getPathname();
-                if ( stripos( $path, $machine_code ) !== false ) $score += 1_000_000_000;
-                if ( $score > $top ) { $top = $score; $best = $path; }
+                $path = $file->getPathname();
+                if ( $norm_code && strpos( self::norm_code( $path ), $norm_code ) !== false ) {
+                    if ( $mtime > $best_code_m ) { $best_code_m = $mtime; $best_code = $path; }
+                } elseif ( $fallback_max && $mtime <= $fallback_max && $mtime > $best_any_m ) {
+                    $best_any_m = $mtime; $best_any = $path;
+                }
             }
         } catch ( Exception $e ) {
             return null;
         }
-        return $best;
+        return $best_code ?: $best_any;
+    }
+
+    /** Normaliza a minúsculas alfanuméricas (sin espacios, acentos ni signos) para comparar códigos con nombres de archivo. */
+    private static function norm_code( $value ) {
+        return strtolower( preg_replace( '/[^a-z0-9]/i', '', remove_accents( (string) $value ) ) );
     }
 
     // -------------------------------------------------------------------------
