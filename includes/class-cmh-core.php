@@ -20,6 +20,7 @@ class CMH_Core {
             'logs'          => $p . 'logs',
             'assignments'   => $p . 'assignments',
             'tasks'         => $p . 'tasks',
+            'clients'       => $p . 'client_companies',
         ];
     }
 
@@ -174,6 +175,18 @@ class CMH_Core {
             KEY status (status)
         ) $c;" );
 
+        // v0.10 — Acceso de clientes por empresa.
+        dbDelta( "CREATE TABLE {$t['clients']} (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id    BIGINT UNSIGNED NOT NULL,
+            company_id BIGINT UNSIGNED NOT NULL,
+            created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY user_company (user_id, company_id),
+            KEY user_id (user_id),
+            KEY company_id (company_id)
+        ) $c;" );
+
         // Migrar branch_id a nullable en instalaciones existentes.
         self::run_migrations( $t );
 
@@ -204,8 +217,23 @@ class CMH_Core {
             $role->add_cap( 'cmh_tech' );
         }
 
+        // v0.10 — Rol de cliente: acceso de solo lectura al portal (cmh_client).
+        if ( ! get_role( 'cmh_client' ) ) {
+            add_role( 'cmh_client', 'Cliente (CM)', [
+                'read'       => true,
+                'cmh_client' => true,
+            ] );
+        } else {
+            $role = get_role( 'cmh_client' );
+            $role->add_cap( 'read' );
+            $role->add_cap( 'cmh_client' );
+        }
+
         $admin = get_role( 'administrator' );
-        if ( $admin ) $admin->add_cap( 'cmh_tech' );
+        if ( $admin ) {
+            $admin->add_cap( 'cmh_tech' );
+            $admin->add_cap( 'cmh_client' );
+        }
     }
 
     /** Ejecuta migraciones específicas de versión. */

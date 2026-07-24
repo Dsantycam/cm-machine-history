@@ -47,7 +47,7 @@ class CMH_Admin {
     }
 
     public static function assets( $hook ) {
-        if ( strpos( $hook, CMH_SLUG ) === false && strpos( $hook, 'cmh-tech' ) === false ) return;
+        if ( strpos( $hook, CMH_SLUG ) === false && strpos( $hook, 'cmh-tech' ) === false && strpos( $hook, 'cmh-client' ) === false ) return;
         wp_enqueue_style(  'cmh-admin', CMH_URL . 'assets/admin.css', [],          CMH_VERSION );
         wp_enqueue_script( 'cmh-admin', CMH_URL . 'assets/admin.js',  [ 'jquery' ], CMH_VERSION, true );
 
@@ -389,7 +389,14 @@ class CMH_Admin {
             . '<label>Nombre <em>*</em></label><input name="name" placeholder="BOGOTÁ" required class="cmh-uppercase">'
             . '<label>Código <em>*</em></label><input name="code" placeholder="BOG" maxlength="10" required class="cmh-uppercase">'
             . '<button class="button button-primary">Guardar</button></form>';
-        echo '</div><div class="cmh-panel"><h2>Editar empresa</h2>';
+        echo '</div>';
+
+        // v0.10 — Clientes con acceso a esta empresa (portal de solo lectura).
+        echo '<div class="cmh-panel"><h2>Clientes con acceso</h2>';
+        CMH_Client::company_clients_panel( $company_id );
+        echo '</div>';
+
+        echo '<div class="cmh-panel"><h2>Editar empresa</h2>';
         self::form_start( 'cm_update_company' );
         echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ) ) . '">'
