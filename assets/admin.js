@@ -175,6 +175,20 @@
         }
     });
 
+    // ─── Recurrencia de mantenimiento — opción «Otro (días)» ──────────────────
+    // El <select> lleva los presets; al elegir "custom" se muestra el campo numérico
+    // hermano para escribir un intervalo libre en días.
+    $(document).on('change', '.cmh-interval-select', function () {
+        var $sel    = $(this);
+        var $custom = $sel.siblings('.cmh-interval-custom');
+        if (!$custom.length) return;
+        if ($sel.val() === 'custom') {
+            $custom.show().attr('required', true).focus();
+        } else {
+            $custom.hide().removeAttr('required').val('');
+        }
+    });
+
     // ─── Forzar mayúsculas en campos marcados ─────────────────────────────────
     $(document).on('input', '.cmh-uppercase', function () {
         var pos = this.selectionStart;

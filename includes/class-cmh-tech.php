@@ -456,9 +456,16 @@ class CMH_Tech {
         if ( $hourmeter > 0 && $hourmeter >= $prev_hm )
             $wpdb->update( $t['machines'], [ 'current_hourmeter' => $hourmeter, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
 
+        // v0.11 — Recurrencia: un preventivo reprograma solo la próxima fecha.
+        $msg  = 'Intervención registrada.';
+        $auto = CMH_Schedule::recalc_next_maintenance(
+            $machine_id, sanitize_text_field( $_POST['intervention_date'] ), $mtype
+        );
+        if ( $auto ) $msg .= ' Próximo mantenimiento: ' . $auto . '.';
+
         CMH_Admin::redirect_to(
             CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $machine_id ] ),
-            'Intervención registrada.', $hm_warn
+            $msg, $hm_warn
         );
     }
 }
