@@ -282,12 +282,38 @@
 .cmh-toolbar h2 { margin: 0; font-size: 15px; font-weight: 700; }
 .cmh-toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ── Reportes (v1.0) ──────────────────────────────────────── */
+.cmh-report-filters {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+}
+.cmh-report-filters label {
+    display: flex; flex-direction: column; gap: 4px;
+    margin: 0; font-size: 12px; font-weight: 600; color: var(--cmh-gray-600);
+}
+.cmh-report-filters select,
+.cmh-report-filters input { min-width: 170px; margin: 0; }
+.cmh-report-filters .button { margin-bottom: 1px; }
+
+/* Las gráficas son SVG con viewBox: escalan al ancho y hacen scroll propio
+   en pantallas estrechas en vez de romper el layout de la página. */
+.cmh-chart { width: 100%; overflow-x: auto; }
+.cmh-chart svg { display: block; min-width: 460px; }
+
+@media (max-width: 782px) {
+    .cmh-report-filters { display: block; }
+    .cmh-report-filters label { margin-bottom: 10px; }
+    .cmh-report-filters select,
+    .cmh-report-filters input { width: 100%; }
+}
+
 /* ── Print ────────────────────────────────────────────────── */
 @media print {
     #adminmenumain, #adminmenuback, #wpadminbar, #wpfooter,
     .cmh-tabs-wrapper, .cmh-hero-actions, .cmh-side,
     .cmh-filterbar, .cmh-toolbar-actions .button:not(.cmh-print-only),
-    .cmh-card-actions .button, form { display: none !important; }
+    .cmh-toolbar .button, .cmh-card-actions .button, form { display: none !important; }
+    .cmh-chart { overflow: visible; }
+    .cmh-chart svg { min-width: 0; }
     .cmh-layout      { grid-template-columns: 1fr !important; }
     .cmh-tab-panel   { display: block !important; }
     .cmh-panel       { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }

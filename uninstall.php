@@ -13,6 +13,10 @@ foreach ( [ 'client_companies', 'tasks', 'assignments', 'logs', 'files', 'interv
 delete_option( 'cmh_version' );
 delete_option( 'cmh_machine_history_version' );
 
+// v0.11 — ajustes de alertas y job diario de mantenimiento.
+delete_option( 'cmh_settings' );
+wp_clear_scheduled_hook( 'cmh_daily_maintenance_event' );
+
 // v0.9 — eliminar rol de técnico y su capacidad.
 remove_role( 'cmh_technician' );
 // v0.10 — eliminar rol de cliente y su capacidad.
