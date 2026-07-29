@@ -218,6 +218,16 @@ class CMH_Integration {
         CMH_Core::log( 'success', $form_id, $machine_code, $intervention_id,
             'Intervención creada desde Forminator.', [] );
 
+        // v0.11 — Recurrencia: si el formulario registró un preventivo y la máquina
+        // tiene intervalo configurado, se reprograma la próxima fecha automáticamente.
+        $next = CMH_Schedule::recalc_next_maintenance(
+            (int) $machine->id, $date ?: current_time( 'Y-m-d' ), $maintenance_type
+        );
+        if ( $next ) {
+            CMH_Core::log( 'info', $form_id, $machine_code, $intervention_id,
+                'Próximo mantenimiento reprogramado para ' . $next . '.', [] );
+        }
+
         // Epoch real del envío (no la fecha de la BD): así la ventana de búsqueda es
         // inmune a la zona horaria de MySQL y coincide con el mtime real de los archivos.
         $submitted = time();

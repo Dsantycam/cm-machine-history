@@ -45,7 +45,9 @@ class CMH_Admin {
         add_submenu_page( $slug, 'Dashboard',       'Dashboard',       'edit_others_posts', $slug,                  [ __CLASS__, 'page_dashboard' ] );
         add_submenu_page( $slug, 'Empresas',        'Empresas',        'edit_others_posts', $slug . '-companies',   [ __CLASS__, 'page_companies' ] );
         add_submenu_page( $slug, 'Buscar máquinas', 'Buscar máquinas', 'edit_others_posts', $slug . '-machines',    [ __CLASS__, 'page_machines' ] );
+        add_submenu_page( $slug, 'Reportes',        'Reportes',        'edit_others_posts', $slug . '-reports',     [ 'CMH_Reports', 'page_reports' ] );
         add_submenu_page( $slug, 'Integración',     'Integración',     'edit_others_posts', $slug . '-integration', [ __CLASS__, 'page_integration' ] );
+        add_submenu_page( $slug, 'Ajustes',         'Ajustes',         'edit_others_posts', $slug . '-settings',    [ 'CMH_Schedule', 'page_settings' ] );
     }
 
     public static function assets( $hook ) {
@@ -234,7 +236,7 @@ class CMH_Admin {
         // Mantenimientos próximos (≤ 30 días o vencidos)
         $in30     = date( 'Y-m-d', strtotime( '+30 days', current_time( 'timestamp' ) ) );
         $upcoming = $wpdb->get_results( $wpdb->prepare(
-            "SELECT m.id, m.machine_code, m.brand, m.model, m.next_maintenance_date,
+            "SELECT m.id, m.machine_code, m.brand, m.model, m.next_maintenance_date, m.maintenance_interval_days,
                     c.name company_name, ci.name city_name
              FROM {$t['machines']} m
              JOIN {$t['companies']} c  ON c.id=m.company_id
@@ -244,10 +246,15 @@ class CMH_Admin {
             $in30
         ) );
         if ( $upcoming ) {
+            $alerts_on = (bool) CMH_Schedule::setting( 'alerts_enabled' );
             echo '<div class="cmh-panel">'
+                . '<div class="cmh-toolbar">'
                 . '<h2>Mantenimientos próximos <small style="font-weight:400;font-size:13px;color:#646970">— próximos 30 días o vencidos</small></h2>'
+                . '<a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-settings' ) ) . '">'
+                . ( $alerts_on ? 'Alertas activas' : 'Alertas desactivadas' ) . ' — Ajustes</a>'
+                . '</div>'
                 . '<table class="widefat cmh"><thead><tr>'
-                . '<th>Máquina</th><th>Equipo</th><th>Ubicación</th><th>Fecha programada</th><th>Estado</th><th></th>'
+                . '<th>Máquina</th><th>Equipo</th><th>Ubicación</th><th>Fecha programada</th><th>Recurrencia</th><th>Estado</th><th></th>'
                 . '</tr></thead><tbody>';
             foreach ( $upcoming as $um ) {
                 $days = CMH_Metrics::maintenance_days( $um->next_maintenance_date );
@@ -260,6 +267,7 @@ class CMH_Admin {
                     . '<td>' . esc_html( trim( $um->brand . ' ' . $um->model ) ) . '</td>'
                     . '<td style="font-size:12px">' . esc_html( $um->company_name . ' / ' . $um->city_name ) . '</td>'
                     . '<td>' . esc_html( $um->next_maintenance_date ) . '</td>'
+                    . '<td style="font-size:12px;color:#646970">' . esc_html( CMH_Schedule::interval_label( $um->maintenance_interval_days ) ) . '</td>'
                     . '<td>' . $sbadge . '</td>'
                     . '<td><a class="button button-small" href="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $um->id ] ) ) . '">Ver</a></td>'
                     . '</tr>';
@@ -578,6 +586,8 @@ class CMH_Admin {
             . '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">'
             . '<label style="margin:0">Fecha del próximo mantenimiento'
             . '<input type="date" name="next_maintenance_date" value="' . esc_attr( $m->next_maintenance_date ?: '' ) . '" min="' . esc_attr( current_time( 'Y-m-d' ) ) . '" required></label>'
+            . '<label style="margin:0">Repetir cada'
+            . CMH_Schedule::interval_field( (int) ( $m->maintenance_interval_days ?? 0 ) ) . '</label>'
             . '<button class="button button-primary">Guardar fecha</button>'
             . ( $m->next_maintenance_date ? '<button type="submit" name="clear_date" value="1" formnovalidate class="button" style="color:#d63638;border-color:#d63638">Quitar fecha</button>' : '' )
             . '</div></form></div>';
@@ -620,6 +630,7 @@ class CMH_Admin {
             . '<div><span>Último técnico</span><strong>' . esc_html( $last && $last->technician ? $last->technician : '—' ) . '</strong></div>'
             . '<div><span>Averías este mes</span><strong>' . intval( $averia_now ) . '</strong></div>'
             . '<div><span>Próximo mantenimiento</span><strong>' . $maint_label . '</strong></div>'
+            . '<div><span>Recurrencia</span><strong>' . esc_html( CMH_Schedule::interval_label( $m->maintenance_interval_days ?? 0 ) ) . '</strong></div>'
             . '</div>'
             . ( $m->notes ? '<div class="cmh-note"><strong>Notas:</strong> ' . esc_html( $m->notes ) . '</div>' : '' )
             . '</div>';
@@ -774,6 +785,8 @@ class CMH_Admin {
             . '</div>'
             . '<label>Estado<select name="status"><option value="activa">Activa</option><option value="mantenimiento">En mantenimiento</option><option value="inactiva">Inactiva</option></select></label>'
             . '<label>Próximo mantenimiento <span class="cmh-optional">(opcional)</span><input type="date" name="next_maintenance_date"></label>'
+            . '<label>Mantenimiento recurrente <span class="cmh-tooltip" title="Al registrar un preventivo se reprograma la próxima fecha sumando este intervalo.">[?]</span>'
+            . CMH_Schedule::interval_field( 0 ) . '</label>'
             . '<label>Notas<textarea name="notes"></textarea></label>'
             . '<button class="button button-primary">Guardar máquina</button></form>';
     }
@@ -799,6 +812,8 @@ class CMH_Admin {
             echo '<option value="' . esc_attr( $k ) . '" ' . selected( $m->status, $k, false ) . '>' . esc_html( $v ) . '</option>';
         echo '</select></label>'
             . '<label>Próximo mantenimiento <span class="cmh-optional">(opcional)</span><input type="date" name="next_maintenance_date" value="' . esc_attr( $m->next_maintenance_date ?: '' ) . '"></label>'
+            . '<label>Mantenimiento recurrente <span class="cmh-tooltip" title="Al registrar un preventivo se reprograma la próxima fecha sumando este intervalo.">[?]</span>'
+            . CMH_Schedule::interval_field( (int) ( $m->maintenance_interval_days ?? 0 ) ) . '</label>'
             . '<label>Notas<textarea name="notes">' . esc_textarea( $m->notes ) . '</textarea></label>'
             . '<button class="button button-primary">Guardar cambios</button></form>';
     }
@@ -992,8 +1007,29 @@ class CMH_Admin {
             . '<p style="font-size:12px;color:#646970;margin-top:10px">Solo las <strong>averías</strong> descuentan disponibilidad. El mantenimiento no impacta este indicador.</p>';
     }
 
+    /**
+     * Taxonomía estándar de sistemas/fallas (viene de la plantilla Excel del cliente).
+     * Fuente única: la usan el formulario de intervención y los reportes.
+     */
+    public static function failure_systems() {
+        return [
+            'frenos'        => 'Frenos',
+            'potencia'      => 'Potencia',
+            'traccion'      => 'Tracción',
+            'seguridad'     => 'Seguridad',
+            'encendido'     => 'Encendido',
+            'refrigeracion' => 'Refrigeración',
+            'mastil'        => 'Mástil',
+            'direccion'     => 'Dirección',
+            'combustible'   => 'Combustible',
+            'hidraulico'    => 'Sist. Hidráulico',
+            'electronico'   => 'Electrónico',
+            'otro'          => 'Otro',
+        ];
+    }
+
     public static function intervention_form( $machine_id, $last_hourmeter = 0, $current_status = 'activa' ) {
-        static $systems = [ 'frenos' => 'Frenos', 'potencia' => 'Potencia', 'traccion' => 'Tracción', 'seguridad' => 'Seguridad', 'encendido' => 'Encendido', 'refrigeracion' => 'Refrigeración', 'mastil' => 'Mástil', 'direccion' => 'Dirección', 'combustible' => 'Combustible', 'hidraulico' => 'Sist. Hidráulico', 'electronico' => 'Electrónico', 'otro' => 'Otro' ];
+        $systems = self::failure_systems();
 
         self::form_start( 'cm_save_intervention' );
         echo '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
@@ -1179,6 +1215,7 @@ class CMH_Admin {
             'scheduled_hours_monthly' => max( 1, floatval( $_POST['scheduled_hours_monthly'] ) ) ?: 480,
             'status'  => sanitize_text_field( $_POST['status'] ),
             'next_maintenance_date' => sanitize_text_field( $_POST['next_maintenance_date'] ?? '' ) ?: null,
+            'maintenance_interval_days' => CMH_Schedule::interval_from_post(),
             'notes'   => sanitize_textarea_field( $_POST['notes'] ),
             'updated_at' => current_time( 'mysql' ),
         ] );
@@ -1237,7 +1274,15 @@ class CMH_Admin {
             );
         }
 
-        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Intervención guardada.', $hm_warn );
+        // V0.11 — Recurrencia: si es preventivo, la máquina tiene intervalo y no se
+        // escribió una fecha a mano, se reprograma el próximo mantenimiento solo.
+        $msg  = 'Intervención guardada.';
+        $auto = CMH_Schedule::recalc_next_maintenance(
+            $machine_id, sanitize_text_field( $_POST['intervention_date'] ), $mtype, $next_maint
+        );
+        if ( $auto ) $msg .= ' Próximo mantenimiento reprogramado para el ' . $auto . '.';
+
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), $msg, $hm_warn );
     }
 
     public static function update_machine() {
@@ -1259,6 +1304,7 @@ class CMH_Admin {
             'scheduled_hours_monthly' => max( 1, floatval( $_POST['scheduled_hours_monthly'] ) ) ?: 480,
             'status'               => sanitize_text_field( $_POST['status'] ),
             'next_maintenance_date' => sanitize_text_field( $_POST['next_maintenance_date'] ?? '' ) ?: null,
+            'maintenance_interval_days' => CMH_Schedule::interval_from_post(),
             'notes'                => sanitize_textarea_field( $_POST['notes'] ),
             'updated_at'           => current_time( 'mysql' ),
         ];
@@ -1326,7 +1372,7 @@ class CMH_Admin {
         }
     }
 
-    private static function csv_headers( $filename ) {
+    public static function csv_headers( $filename ) {
         nocache_headers();
         header( 'Content-Type: text/csv; charset=UTF-8' );
         header( 'Content-Disposition: attachment; filename="' . sanitize_file_name( $filename ) . '"' );
@@ -1334,7 +1380,7 @@ class CMH_Admin {
         echo "\xEF\xBB\xBF"; // BOM para Excel
     }
 
-    private static function csv_row( $row ) {
+    public static function csv_row( $row ) {
         $out = fopen( 'php://output', 'w' );
         fputcsv( $out, $row, ';' );
         fclose( $out );
@@ -1359,11 +1405,11 @@ class CMH_Admin {
             array_push( $params, $like, $like, $like );
         }
         $w = $where ? 'WHERE ' . implode( ' AND ', $where ) : '';
-        $sql = "SELECT m.machine_code, m.brand, m.model, m.serial, m.contact, c.name empresa, ci.name ciudad, COALESCE(b.name,'') sucursal, m.status, m.current_hourmeter, m.scheduled_hours_monthly, (SELECT COUNT(*) FROM {$t['interventions']} i WHERE i.machine_id=m.id) intervenciones, (SELECT MAX(i.intervention_date) FROM {$t['interventions']} i WHERE i.machine_id=m.id) ultima_intervencion, m.notes FROM {$t['machines']} m JOIN {$t['companies']} c ON c.id=m.company_id JOIN {$t['cities']} ci ON ci.id=m.city_id LEFT JOIN {$t['branches']} b ON b.id=m.branch_id $w ORDER BY m.machine_code";
+        $sql = "SELECT m.machine_code, m.brand, m.model, m.serial, m.contact, c.name empresa, ci.name ciudad, COALESCE(b.name,'') sucursal, m.status, m.current_hourmeter, m.scheduled_hours_monthly, COALESCE(m.next_maintenance_date,'') proximo_mantenimiento, COALESCE(m.maintenance_interval_days,0) recurrencia_dias, (SELECT COUNT(*) FROM {$t['interventions']} i WHERE i.machine_id=m.id) intervenciones, (SELECT MAX(i.intervention_date) FROM {$t['interventions']} i WHERE i.machine_id=m.id) ultima_intervencion, m.notes FROM {$t['machines']} m JOIN {$t['companies']} c ON c.id=m.company_id JOIN {$t['cities']} ci ON ci.id=m.city_id LEFT JOIN {$t['branches']} b ON b.id=m.branch_id $w ORDER BY m.machine_code";
         $rows = $params ? $wpdb->get_results( $wpdb->prepare( $sql, $params ), ARRAY_A ) : $wpdb->get_results( $sql, ARRAY_A );
 
         self::csv_headers( 'maquinas-' . date( 'Y-m-d' ) . '.csv' );
-        self::csv_row( [ 'Código', 'Marca', 'Modelo', 'Serial', 'Contacto', 'Empresa', 'Ciudad', 'Sucursal', 'Estado', 'Horómetro', 'H.Prog/Mes', 'Intervenciones', 'Última intervención', 'Notas' ] );
+        self::csv_row( [ 'Código', 'Marca', 'Modelo', 'Serial', 'Contacto', 'Empresa', 'Ciudad', 'Sucursal', 'Estado', 'Horómetro', 'H.Prog/Mes', 'Próximo mantenimiento', 'Recurrencia (días)', 'Intervenciones', 'Última intervención', 'Notas' ] );
         foreach ( $rows as $r ) self::csv_row( array_values( $r ) );
         exit;
     }
@@ -1441,16 +1487,23 @@ class CMH_Admin {
         if ( ! $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['machines']} WHERE id=%d", $machine_id ) ) )
             wp_die( 'Máquina no encontrada.' );
 
+        // El intervalo se guarda siempre (también al quitar la fecha): es una propiedad
+        // de la máquina, no de la fecha puntual.
+        $interval = CMH_Schedule::interval_from_post();
+
         if ( ! empty( $_POST['clear_date'] ) ) {
-            $wpdb->update( $t['machines'], [ 'next_maintenance_date' => null, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
+            $wpdb->update( $t['machines'], [ 'next_maintenance_date' => null, 'maintenance_interval_days' => $interval, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
             self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Fecha de mantenimiento eliminada.' );
         }
 
         $date = sanitize_text_field( $_POST['next_maintenance_date'] ?? '' );
         if ( ! $date ) self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), '', 'Indica una fecha para programar el mantenimiento.' );
 
-        $wpdb->update( $t['machines'], [ 'next_maintenance_date' => $date, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
-        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Mantenimiento programado para el ' . $date . '.' );
+        $wpdb->update( $t['machines'], [ 'next_maintenance_date' => $date, 'maintenance_interval_days' => $interval, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
+
+        $msg = 'Mantenimiento programado para el ' . $date . '.';
+        if ( $interval ) $msg .= ' Se repetirá automáticamente: ' . CMH_Schedule::interval_label( $interval ) . '.';
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), $msg );
     }
 
     // =========================================================================
@@ -1684,7 +1737,9 @@ class CMH_Admin {
             foreach ( $tasks as $ta ) {
                 $tech_name = $ta->assigned_to ? get_the_author_meta( 'display_name', $ta->assigned_to ) : '—';
                 echo '<tr>'
-                    . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 24 ) ) . '</span>' : '' ) . '</td>'
+                    . '<td><strong>' . esc_html( $ta->title ) . '</strong>'
+                    . ( ( $ta->source ?? '' ) === 'auto' ? ' <span class="cmh-badge" style="background:#e7f0f7;color:#2271b1">Auto</span>' : '' )
+                    . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 24 ) ) . '</span>' : '' ) . '</td>'
                     . '<td>' . esc_html( $tech_name ?: '—' ) . '</td>'
                     . '<td>' . esc_html( $ta->due_date ?: '—' ) . '</td>'
                     . '<td>' . CMH_Tech::task_status_badge( $ta->status ) . '</td>'

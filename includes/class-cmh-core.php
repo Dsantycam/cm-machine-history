@@ -80,6 +80,7 @@ class CMH_Core {
             status                  VARCHAR(40)     NOT NULL DEFAULT 'activa',
             notes                   TEXT            NULL,
             next_maintenance_date   DATE            NULL,
+            maintenance_interval_days INT UNSIGNED  NULL,
             created_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at              DATETIME        NULL,
             PRIMARY KEY (id),
@@ -168,6 +169,7 @@ class CMH_Core {
             notes       TEXT            NULL,
             due_date    DATE            NULL,
             status      VARCHAR(40)     NOT NULL DEFAULT 'pendiente',
+            source      VARCHAR(20)     NOT NULL DEFAULT 'manual',
             created_by  BIGINT UNSIGNED NULL,
             created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at  DATETIME        NULL,
@@ -194,6 +196,9 @@ class CMH_Core {
 
         // v0.9 — Rol de técnico y capacidades.
         self::setup_roles();
+
+        // v0.11 — Job diario de alertas de mantenimiento.
+        if ( class_exists( 'CMH_Schedule' ) ) CMH_Schedule::schedule_cron();
 
         update_option( 'cmh_version', CMH_VERSION );
     }
@@ -266,6 +271,18 @@ class CMH_Core {
             $wpdb->query( "ALTER TABLE {$t['interventions']} ADD COLUMN payment_status VARCHAR(20) NOT NULL DEFAULT 'pendiente' AFTER cost" );
             $wpdb->query( "ALTER TABLE {$t['interventions']} ADD COLUMN paid_amount DECIMAL(14,2) NOT NULL DEFAULT 0 AFTER payment_status" );
         }
+
+        // v0.11 — Intervalo de mantenimiento recurrente por máquina.
+        $coli = $wpdb->get_row( "SHOW COLUMNS FROM {$t['machines']} LIKE 'maintenance_interval_days'" );
+        if ( ! $coli ) {
+            $wpdb->query( "ALTER TABLE {$t['machines']} ADD COLUMN maintenance_interval_days INT UNSIGNED NULL DEFAULT NULL AFTER next_maintenance_date" );
+        }
+
+        // v0.11 — Origen de la tarea (manual / auto) para las autogeneradas por el cron.
+        $cols = $wpdb->get_row( "SHOW COLUMNS FROM {$t['tasks']} LIKE 'source'" );
+        if ( ! $cols ) {
+            $wpdb->query( "ALTER TABLE {$t['tasks']} ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'manual' AFTER status" );
+        }
     }
 
     /** Verifica la versión instalada y corre activate() si hay diferencia. */
@@ -275,6 +292,11 @@ class CMH_Core {
             self::activate();
             delete_option( 'cmh_machine_history_version' );
         }
+    }
+
+    /** Limpia lo que no debe sobrevivir a la desactivación del plugin. */
+    public static function deactivate() {
+        if ( class_exists( 'CMH_Schedule' ) ) CMH_Schedule::unschedule_cron();
     }
 
     /** Registra una entrada en la tabla de logs de integración. */
