@@ -320,12 +320,19 @@ class CMH_Schedule {
     // Correos
     // =========================================================================
 
-    /** Envía HTML sin dejar el filtro de content-type pegado para otros plugins. */
+    /**
+     * Envía HTML sin dejar el filtro de content-type pegado para otros plugins.
+     *
+     * v1.0.1 — Además del filtro, se pasa la cabecera `Content-Type` explícita:
+     * los conectores de correo por API (Zoho, SendGrid, Brevo…) sustituyen
+     * `wp_mail` por completo y muchos leen solo las cabeceras del mensaje,
+     * ignorando el filtro — sin ella el correo llega con el HTML crudo a la vista.
+     */
     private static function send_html( $to, $subject, $body ) {
         if ( ! $to ) return false;
         $ct = static function () { return 'text/html; charset=UTF-8'; };
         add_filter( 'wp_mail_content_type', $ct );
-        $ok = wp_mail( $to, $subject, $body );
+        $ok = wp_mail( $to, $subject, $body, [ 'Content-Type: text/html; charset=UTF-8' ] );
         remove_filter( 'wp_mail_content_type', $ct );
         return (bool) $ok;
     }
