@@ -9,16 +9,32 @@
     var ajaxurl = CMHFront.ajaxurl;
     var configs = CMHFront.formConfigs || {};
 
-    // Campos de máquina que podemos rellenar, mapeados a posibles textos de etiqueta
+    // Campos de máquina que podemos rellenar, mapeados a posibles textos de etiqueta.
+    // v1.0.1 — las claves deben ser específicas: el match es por CONTENIDO de la
+    // etiqueta, así que una palabra suelta como 'horas' capturaba también
+    // «¿Cuántas horas estuvo detenida la máquina?» y le metía el horómetro.
     var labelMap = {
         brand:             ['marca', 'brand', 'fabricante'],
-        model:             ['modelo', 'model', 'tipo de equipo', 'tipo'],
+        model:             ['modelo', 'model', 'tipo de equipo', 'tipo de máquina', 'tipo de maquina'],
         serial:            ['serial', 'serie', 'número de serie', 'no. serie', 'n° serie', 'no serie'],
         contact:           ['contacto', 'contact', 'encargado', 'operador', 'responsable'],
-        current_hourmeter: ['horómetro', 'horometro', 'hourmeter', 'horas', 'km', 'odómetro'],
-        company_name:      ['empresa', 'company', 'cliente'],
-        city_name:         ['ciudad', 'sucursal', 'sede', 'ubicación', 'city'],
+        current_hourmeter: ['horómetro', 'horometro', 'hourmeter', 'odómetro', 'odometro', 'km'],
+        company_name:      ['empresa', 'company', 'cliente', 'razón social', 'razon social'],
+        city_name:         ['ciudad', 'sucursal', 'sede', 'ubicación', 'ubicacion', 'city'],
     };
+
+    // v1.0.1 — Etiquetas que NUNCA se autocompletan aunque coincida alguna clave.
+    // Son campos que llena el técnico: tiempos de parada, horas trabajadas, etc.
+    var labelBlocklist = [
+        'detenid', 'parada', 'parado', 'inactiv', 'trabajad', 'duración', 'duracion',
+        'cuánto', 'cuanto', 'cuántas', 'cuantas', 'cuántos', 'cuantos', 'firma',
+    ];
+
+    function isBlocked(labelText) {
+        return labelBlocklist.some(function (kw) {
+            return labelText.indexOf(kw) !== -1;
+        });
+    }
 
     // Campo machine_field → contact_field (del config, como respaldo explícito)
     var fieldMap = {};
@@ -44,6 +60,7 @@
             var $row      = $(this);
             var labelText = $row.find('label, .forminator-label').first().text().trim().toLowerCase();
             if (!labelText) return;
+            if (isBlocked(labelText)) return;
 
             Object.keys(labelMap).forEach(function (prop) {
                 var val = machineData[prop];

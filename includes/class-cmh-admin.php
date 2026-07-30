@@ -858,10 +858,31 @@ class CMH_Admin {
         return [ 'pendiente' => 'Pendiente', 'parcial' => 'Parcial', 'pagado' => 'Pagado' ];
     }
 
-    /** Valida el estado de pago recibido; si no es válido, lo deriva de costo/abonado. */
-    public static function sanitize_payment_status( $status, $cost, $paid ) {
+    /**
+     * v1.0.1 — Concilia estado y monto abonado antes de guardar.
+     *
+     * El estado que elige el usuario manda: marcar «Pagado» pone el abonado igual
+     * al costo y «Pendiente» lo pone en cero, para que el saldo (cost − paid_amount)
+     * que usan los KPIs y los reportes no contradiga el badge. «Parcial» respeta el
+     * monto escrito, pero si se sale del rango se corrige el estado en vez del monto.
+     *
+     * @return array{0:string,1:float} [ estado, abonado ]
+     */
+    public static function normalize_payment( $status, $cost, $paid ) {
+        $cost   = max( 0, (float) $cost );
+        $paid   = max( 0, (float) $paid );
         $status = sanitize_key( $status );
-        return isset( self::payment_statuses()[ $status ] ) ? $status : self::derive_payment_status( $cost, $paid );
+        if ( ! isset( self::payment_statuses()[ $status ] ) )
+            $status = self::derive_payment_status( $cost, $paid );
+
+        if ( 'pagado' === $status )    return [ 'pagado', $cost ];
+        if ( 'pendiente' === $status ) return [ 'pendiente', 0.0 ];
+
+        // Parcial: el monto es libre, pero acotado al costo.
+        $paid = min( $paid, $cost );
+        if ( $cost > 0 && $paid >= $cost ) return [ 'pagado', $cost ];
+        if ( $paid <= 0 )                  return [ 'pendiente', 0.0 ];
+        return [ 'parcial', $paid ];
     }
 
     /** Deriva el estado de pago a partir del costo y lo abonado. */
@@ -1238,6 +1259,8 @@ class CMH_Admin {
         if ( $hourmeter > 0 && $prev_hm > 0 && $hourmeter < $prev_hm )
             $hm_warn = sprintf( 'Horómetro ingresado (%.2f h) es menor al registrado anteriormente (%.2f h).', $hourmeter, $prev_hm );
 
+        list( $pay_status, $pay_paid ) = self::normalize_payment( $_POST['payment_status'] ?? '', $_POST['cost'] ?? 0, $_POST['paid_amount'] ?? 0 );
+
         $wpdb->insert( $t['interventions'], [
             'machine_id'           => $machine_id, 'forminator_form_id' => null,
             'intervention_date'    => sanitize_text_field( $_POST['intervention_date'] ),
@@ -1245,8 +1268,8 @@ class CMH_Admin {
             'maintenance_type'     => $mtype, 'technician' => sanitize_text_field( $_POST['technician'] ),
             'hourmeter'            => $hourmeter, 'worked_hours' => floatval( $_POST['worked_hours'] ),
             'downtime_hours'       => floatval( $_POST['downtime_hours'] ), 'cost' => floatval( $_POST['cost'] ),
-            'payment_status'       => self::sanitize_payment_status( $_POST['payment_status'] ?? '', $_POST['cost'] ?? 0, $_POST['paid_amount'] ?? 0 ),
-            'paid_amount'          => floatval( $_POST['paid_amount'] ?? 0 ),
+            'payment_status'       => $pay_status,
+            'paid_amount'          => $pay_paid,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
             'failure_system'       => sanitize_text_field( $_POST['failure_system'] ),
             'parts'                => sanitize_textarea_field( $_POST['parts'] ),
@@ -1462,14 +1485,16 @@ class CMH_Admin {
         $mtype     = sanitize_text_field( $_POST['maintenance_type'] );
         $manual_av = isset( $_POST['affects_availability'] ) ? 1 : 0;
 
+        list( $pay_status, $pay_paid ) = self::normalize_payment( $_POST['payment_status'] ?? '', $_POST['cost'] ?? 0, $_POST['paid_amount'] ?? 0 );
+
         $wpdb->update( $t['interventions'], [
             'intervention_date'    => sanitize_text_field( $_POST['intervention_date'] ),
             'maintenance_type'     => $mtype,
             'technician'           => sanitize_text_field( $_POST['technician'] ),
             'downtime_hours'       => floatval( $_POST['downtime_hours'] ),
             'cost'                 => floatval( $_POST['cost'] ),
-            'payment_status'       => self::sanitize_payment_status( $_POST['payment_status'] ?? '', $_POST['cost'] ?? 0, $_POST['paid_amount'] ?? 0 ),
-            'paid_amount'          => floatval( $_POST['paid_amount'] ?? 0 ),
+            'payment_status'       => $pay_status,
+            'paid_amount'          => $pay_paid,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),
         ], [ 'id' => $id ] );
