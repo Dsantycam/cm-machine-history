@@ -111,33 +111,74 @@
         syncMtype();
     }
 
-    // ─── Pago — saldo y sugerencia de estado ──────────────────────────────────
-    var $cost    = $('#cmh-cost-input');
-    var $paid    = $('#cmh-paid-input');
-    var $payStat = $('#cmh-payment-status');
-    var $saldoH  = $('#cmh-saldo-hint');
-    var payTouched = false;
+    // ─── Pago — saldo y conciliación estado ⇄ abonado ─────────────────────────
+    // v1.0.1 — El estado que elige el usuario manda: «Pagado» pone el abonado en
+    // el costo y «Pendiente» lo pone en cero. Antes el estado se guardaba pero el
+    // abonado quedaba en 0, y los KPIs (que restan cost − paid_amount) seguían
+    // contando la intervención como por cobrar. El servidor hace lo mismo en
+    // CMH_Admin::normalize_payment(), así que esto es solo comodidad visual.
+    //
+    // Delegado y por scope de formulario para cubrir tanto el formulario de alta
+    // como los formularios de edición inline del timeline, que no tienen IDs.
+    function payScope($el) {
+        var $form = $el.closest('form');
+        var $s = $form.find('select[name="payment_status"]');
+        if (!$s.length) return null;
+        return {
+            form:  $form,
+            stat:  $s,
+            cost:  $form.find('input[name="cost"]'),
+            paid:  $form.find('input[name="paid_amount"]'),
+            hint:  $form.find('#cmh-saldo-hint'),
+        };
+    }
 
-    if ($payStat.length) $payStat.on('change', function () { payTouched = true; });
+    function paySaldoHint(sc) {
+        if (!sc.hint.length) return;
+        var cost = parseFloat(sc.cost.val()) || 0;
+        var paid = parseFloat(sc.paid.val()) || 0;
+        sc.hint.text(cost > 0
+            ? 'Saldo: $' + Math.max(0, cost - paid).toLocaleString('es-CO') + ' (costo $' + cost.toLocaleString('es-CO') + ' − abonado $' + paid.toLocaleString('es-CO') + ')'
+            : 'Saldo = costo − abonado.');
+    }
 
-    function syncPayment() {
-        var cost = parseFloat($cost.val()) || 0;
-        var paid = parseFloat($paid.val()) || 0;
-        var saldo = Math.max(0, cost - paid);
-        var derived = (cost <= 0) ? (paid > 0 ? 'pagado' : 'pendiente')
-                    : (paid >= cost ? 'pagado' : (paid > 0 ? 'parcial' : 'pendiente'));
-        if (!payTouched && $payStat.length) $payStat.val(derived);
-        if ($saldoH.length) {
-            $saldoH.text(cost > 0
-                ? 'Saldo: $' + saldo.toLocaleString('es-CO') + ' (costo $' + cost.toLocaleString('es-CO') + ' − abonado $' + paid.toLocaleString('es-CO') + ')'
-                : 'Saldo = costo − abonado.');
+    // El estado manda sobre el monto, y elegirlo lo marca como decisión del usuario.
+    $(document).on('change', 'select[name="payment_status"]', function () {
+        var sc = payScope($(this));
+        if (!sc) return;
+        sc.form.data('cmhPayTouched', true);
+        if (!sc.paid.length) return;
+        var status = sc.stat.val();
+        if (status === 'pagado')         sc.paid.val(parseFloat(sc.cost.val()) || 0);
+        else if (status === 'pendiente') sc.paid.val(0);
+        paySaldoHint(sc);
+    });
+
+    // El monto solo sugiere el estado mientras el usuario no lo haya fijado a mano.
+    $(document).on('input change', 'input[name="cost"], input[name="paid_amount"]', function () {
+        var sc = payScope($(this));
+        if (!sc) return;
+        var cost = parseFloat(sc.cost.val()) || 0;
+        var paid = parseFloat(sc.paid.val()) || 0;
+
+        // Si ya está en «Pagado», mover el costo arrastra el abonado.
+        if (sc.stat.val() === 'pagado' && $(this).is('input[name="cost"]')) {
+            sc.paid.val(cost);
+        } else if (!sc.form.data('cmhPayTouched')) {
+            sc.stat.val(cost <= 0 ? (paid > 0 ? 'pagado' : 'pendiente')
+                                  : (paid >= cost ? 'pagado' : (paid > 0 ? 'parcial' : 'pendiente')));
         }
-    }
-    if ($cost.length && $paid.length) {
-        $cost.on('input change', syncPayment);
-        $paid.on('input change', syncPayment);
-        syncPayment();
-    }
+        paySaldoHint(sc);
+    });
+
+    $('select[name="payment_status"]').each(function () {
+        var sc = payScope($(this));
+        if (!sc) return;
+        // En edición inline el estado viene de la BD: es una decisión ya tomada,
+        // no la pisamos al recalcular por cambio de costo.
+        if (sc.form.find('input[name="intervention_id"]').length) sc.form.data('cmhPayTouched', true);
+        paySaldoHint(sc);
+    });
 
     // ─── Máquinas — fila completa clickable ───────────────────────────────────
     $(document).on('click', '.cmh-machine-table tbody tr', function (e) {

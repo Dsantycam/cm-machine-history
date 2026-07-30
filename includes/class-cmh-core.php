@@ -243,6 +243,33 @@ class CMH_Core {
         }
     }
 
+    /**
+     * v1.0.1 — Devuelve el acceso a wp-admin a los roles del plugin.
+     *
+     * WooCommerce expulsa a `wp-admin` a todo usuario sin `edit_posts` y lo manda
+     * a `my-account`. Nuestros roles `cmh_technician` y `cmh_client` tienen
+     * permisos mínimos a propósito (`read` + su capacidad), justo el perfil que
+     * Woo bloquea — así que no podían llegar a «Mis Máquinas» ni «Mis Equipos».
+     *
+     * Solo levanta el bloqueo de Woo: no otorga ninguna capacidad extra, y los
+     * paneles siguen protegidos por sus propias comprobaciones de acceso.
+     */
+    public static function init() {
+        add_filter( 'woocommerce_prevent_admin_access', [ __CLASS__, 'allow_admin_access' ] );
+        add_filter( 'woocommerce_disable_admin_bar',    [ __CLASS__, 'allow_admin_access' ] );
+    }
+
+    /** Devuelve false (no bloquear) si el usuario actual es técnico o cliente del plugin. */
+    public static function allow_admin_access( $prevent ) {
+        return self::is_cmh_panel_user() ? false : $prevent;
+    }
+
+    /** ¿El usuario actual entra por alguno de los paneles del plugin? */
+    public static function is_cmh_panel_user() {
+        return is_user_logged_in()
+            && ( current_user_can( 'cmh_tech' ) || current_user_can( 'cmh_client' ) );
+    }
+
     /** Ejecuta migraciones específicas de versión. */
     private static function run_migrations( $t ) {
         global $wpdb;
@@ -282,6 +309,15 @@ class CMH_Core {
         $cols = $wpdb->get_row( "SHOW COLUMNS FROM {$t['tasks']} LIKE 'source'" );
         if ( ! $cols ) {
             $wpdb->query( "ALTER TABLE {$t['tasks']} ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'manual' AFTER status" );
+        }
+
+        // v1.0.1 — Concilia las intervenciones marcadas «Pagado» que quedaron con
+        // paid_amount = 0. Los KPIs y reportes calculan el saldo como cost − paid_amount
+        // e ignoran el estado, así que seguían contando como por cobrar. Corre una sola vez.
+        if ( ! get_option( 'cmh_migrated_paid_amount' ) ) {
+            $wpdb->query( "UPDATE {$t['interventions']} SET paid_amount = cost WHERE payment_status = 'pagado' AND paid_amount < cost" );
+            $wpdb->query( "UPDATE {$t['interventions']} SET paid_amount = 0 WHERE payment_status = 'pendiente' AND paid_amount > 0" );
+            update_option( 'cmh_migrated_paid_amount', CMH_VERSION, false );
         }
     }
 
