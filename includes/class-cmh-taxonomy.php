@@ -32,6 +32,7 @@ class CMH_Taxonomy {
 
     const OPTION_MTYPES  = 'cmh_mtypes';
     const OPTION_PSTATES = 'cmh_pstates';
+    const OPTION_SYSTEMS = 'cmh_systems';
 
     /** Paleta compartida por ambas listas, para no inventar colores sueltos. */
     const COLORS = [
@@ -64,20 +65,7 @@ class CMH_Taxonomy {
     }
 
     public static function mtypes() {
-        $saved = get_option( self::OPTION_MTYPES, null );
-        if ( ! is_array( $saved ) || ! $saved ) return self::mtype_seed();
-
-        $out = [];
-        foreach ( $saved as $slug => $cfg ) {
-            $slug = self::clean_slug( $slug );
-            if ( $slug === '' || ! is_array( $cfg ) ) continue;
-            $out[ $slug ] = [
-                'label'   => (string) ( $cfg['label'] ?? ucfirst( $slug ) ),
-                'affects' => ! empty( $cfg['affects'] ) ? 1 : 0,
-                'color'   => isset( self::COLORS[ $cfg['color'] ?? '' ] ) ? $cfg['color'] : 'gray',
-            ];
-        }
-        return $out ?: self::mtype_seed();
+        return self::read_list( 'mtypes' );
     }
 
     /** [ slug => etiqueta ], que es lo que consumen los desplegables. */
@@ -126,20 +114,7 @@ class CMH_Taxonomy {
     }
 
     public static function pstates() {
-        $saved = get_option( self::OPTION_PSTATES, null );
-        if ( ! is_array( $saved ) || ! $saved ) return self::pstate_seed();
-
-        $out = [];
-        foreach ( $saved as $slug => $cfg ) {
-            $slug = self::clean_slug( $slug );
-            if ( $slug === '' || ! is_array( $cfg ) ) continue;
-            $out[ $slug ] = [
-                'label' => (string) ( $cfg['label'] ?? ucfirst( $slug ) ),
-                'money' => isset( self::MONEY_MODES[ $cfg['money'] ?? '' ] ) ? $cfg['money'] : 'pending',
-                'color' => isset( self::COLORS[ $cfg['color'] ?? '' ] ) ? $cfg['color'] : 'gray',
-            ];
-        }
-        return $out ?: self::pstate_seed();
+        return self::read_list( 'pstates' );
     }
 
     public static function pstate_labels() {
@@ -200,6 +175,120 @@ class CMH_Taxonomy {
     }
 
     // =========================================================================
+    // Sistemas / fallas (v2.3.1)
+    // =========================================================================
+
+    /**
+     * La taxonomía de fallas que estaba fija en el código. Alimenta la gráfica
+     * «Averías por sistema» y la traducción de valores de cada formato.
+     */
+    public static function system_seed() {
+        return [
+            'frenos'        => [ 'label' => 'Frenos',           'color' => 'danger' ],
+            'potencia'      => [ 'label' => 'Potencia',         'color' => 'warn'   ],
+            'traccion'      => [ 'label' => 'Tracción',         'color' => 'warn'   ],
+            'seguridad'     => [ 'label' => 'Seguridad',        'color' => 'danger' ],
+            'encendido'     => [ 'label' => 'Encendido',        'color' => 'blue'   ],
+            'refrigeracion' => [ 'label' => 'Refrigeración',    'color' => 'blue'   ],
+            'mastil'        => [ 'label' => 'Mástil',           'color' => 'warn'   ],
+            'direccion'     => [ 'label' => 'Dirección',        'color' => 'warn'   ],
+            'combustible'   => [ 'label' => 'Combustible',      'color' => 'blue'   ],
+            'hidraulico'    => [ 'label' => 'Sist. Hidráulico', 'color' => 'blue'   ],
+            'electronico'   => [ 'label' => 'Electrónico',      'color' => 'blue'   ],
+            'otro'          => [ 'label' => 'Otro',             'color' => 'gray'   ],
+        ];
+    }
+
+    public static function systems() {
+        return self::read_list( 'systems' );
+    }
+
+    public static function system_labels() {
+        $out = [];
+        foreach ( self::systems() as $slug => $cfg ) $out[ $slug ] = $cfg['label'];
+        return $out;
+    }
+
+    public static function system_label( $slug ) {
+        $slug = strtolower( (string) $slug );
+        $all  = self::systems();
+        return $all[ $slug ]['label'] ?? ( $slug !== '' ? ucfirst( str_replace( '_', ' ', $slug ) ) : '—' );
+    }
+
+    public static function system_badge( $slug ) {
+        return self::badge( self::system_label( $slug ), self::systems()[ strtolower( (string) $slug ) ]['color'] ?? 'gray' );
+    }
+
+    // =========================================================================
+    // Plumbing común a las tres listas
+    // =========================================================================
+
+    /**
+     * Qué distingue a cada lista: dónde se guarda, de dónde sale su siembra, y
+     * qué campo propio tiene además del nombre y el color.
+     */
+    private static function list_config( $which ) {
+        switch ( $which ) {
+            case 'mtypes':
+                return [
+                    'option' => self::OPTION_MTYPES,  'seed' => 'mtype_seed',  'extra' => 'affects',
+                    'title'  => 'Tipos de mantenimiento',
+                    'column' => 'maintenance_type',
+                    'head'   => '¿Descuenta disponibilidad?',
+                    'ph'     => 'Garantía, Siniestro, Instalación…',
+                    'intro'  => 'Cada tipo decide si <strong>descuenta disponibilidad</strong>, que es lo único con consecuencias sobre los indicadores: lo que descuenta se calcula como una avería. Puedes renombrar los de siempre y agregar los tuyos.',
+                    'foot'   => 'Ojo: cambiar si un tipo descuenta disponibilidad altera los indicadores ya calculados de todas las máquinas que lo usen.',
+                ];
+            case 'pstates':
+                return [
+                    'option' => self::OPTION_PSTATES, 'seed' => 'pstate_seed', 'extra' => 'money',
+                    'title'  => 'Estados de pago',
+                    'column' => 'payment_status',
+                    'head'   => 'Frente al dinero',
+                    'ph'     => 'Pendiente de cotización…',
+                    'intro'  => 'Son las etapas del proceso de cobro —pendiente de cotización, de orden de compra, de formato…—. El dinero se sigue calculando como costo menos abonado; la etapa solo dice en qué punto va. Marca «Anulado» solo en lo que ya no se piensa cobrar.',
+                    'foot'   => 'La clave interna no cambia aunque renombres la etapa, así que no se pierde nada de lo ya guardado.',
+                ];
+            default:
+                return [
+                    'option' => self::OPTION_SYSTEMS, 'seed' => 'system_seed', 'extra' => '',
+                    'title'  => 'Sistemas y fallas',
+                    'column' => 'failure_system',
+                    'head'   => '',
+                    'ph'     => 'Transmisión, Cadenas, Neumáticos…',
+                    'intro'  => 'La lista que alimenta la gráfica «Averías por sistema» y la traducción de valores de cada formato. Agrega los sistemas que manejes; el plugin intenta reconocer solos los que lleguen escritos parecido.',
+                    'foot'   => 'Si retiras un sistema, las intervenciones que ya lo usaban lo conservan y se siguen viendo en los reportes.',
+                ];
+        }
+    }
+
+    /** Lectura genérica de cualquiera de las tres listas. */
+    private static function read_list( $which ) {
+        $c     = self::list_config( $which );
+        $saved = get_option( $c['option'], null );
+        $seed  = call_user_func( [ __CLASS__, $c['seed'] ] );
+        if ( ! is_array( $saved ) || ! $saved ) return $seed;
+
+        $out = [];
+        foreach ( $saved as $slug => $cfg ) {
+            $slug = self::clean_slug( $slug );
+            if ( $slug === '' || ! is_array( $cfg ) ) continue;
+
+            $row = [
+                'label' => (string) ( $cfg['label'] ?? ucfirst( $slug ) ),
+                'color' => isset( self::COLORS[ $cfg['color'] ?? '' ] ) ? $cfg['color'] : 'gray',
+            ];
+            if ( $c['extra'] === 'affects' ) {
+                $row['affects'] = ! empty( $cfg['affects'] ) ? 1 : 0;
+            } elseif ( $c['extra'] === 'money' ) {
+                $row['money'] = isset( self::MONEY_MODES[ $cfg['money'] ?? '' ] ) ? $cfg['money'] : 'pending';
+            }
+            $out[ $slug ] = $row;
+        }
+        return $out ?: $seed;
+    }
+
+    // =========================================================================
     // Guardado
     // =========================================================================
 
@@ -210,10 +299,17 @@ class CMH_Taxonomy {
      * fila sin nombre se descarta; una clave repetida se ignora en vez de pisar
      * a la primera.
      */
+    /**
+     * Guarda una lista tal como llega del formulario de ajustes.
+     *
+     * Una fila sin nombre se descarta —así se borra una entrada— y una clave
+     * repetida se ignora en vez de pisar a la primera. Nunca se guarda una lista
+     * vacía: dejaría al plugin sin taxonomía.
+     */
     public static function save_list( $which, $rows ) {
-        $is_mtype = ( $which === 'mtypes' );
-        $seed     = $is_mtype ? self::mtype_seed() : self::pstate_seed();
-        $out      = [];
+        $c    = self::list_config( $which );
+        $seed = call_user_func( [ __CLASS__, $c['seed'] ] );
+        $out  = [];
 
         foreach ( (array) $rows as $row ) {
             if ( ! is_array( $row ) ) continue;
@@ -227,35 +323,37 @@ class CMH_Taxonomy {
             if ( $slug === '' ) $slug = self::slugify( $label );
             if ( $slug === '' || isset( $out[ $slug ] ) ) continue;
 
-            $color = isset( self::COLORS[ $row['color'] ?? '' ] ) ? $row['color'] : 'gray';
-
-            if ( $is_mtype ) {
-                $out[ $slug ] = [ 'label' => $label, 'affects' => ! empty( $row['affects'] ) ? 1 : 0, 'color' => $color ];
-            } else {
-                $money = isset( self::MONEY_MODES[ $row['money'] ?? '' ] ) ? $row['money'] : 'pending';
-                $out[ $slug ] = [ 'label' => $label, 'money' => $money, 'color' => $color ];
+            $entry = [
+                'label' => $label,
+                'color' => isset( self::COLORS[ $row['color'] ?? '' ] ) ? $row['color'] : 'gray',
+            ];
+            if ( $c['extra'] === 'affects' ) {
+                $entry['affects'] = ! empty( $row['affects'] ) ? 1 : 0;
+            } elseif ( $c['extra'] === 'money' ) {
+                $entry['money'] = isset( self::MONEY_MODES[ $row['money'] ?? '' ] ) ? $row['money'] : 'pending';
             }
+            $out[ $slug ] = $entry;
         }
 
-        // Nunca se guarda una lista vacía: dejaría el plugin sin taxonomía.
         if ( ! $out ) $out = $seed;
 
-        update_option( $is_mtype ? self::OPTION_MTYPES : self::OPTION_PSTATES, $out, true );
+        update_option( $c['option'], $out, true );
         return $out;
     }
 
     /** Cuántas intervenciones usan una clave. Sirve para avisar antes de borrar. */
     public static function usage_counts( $column ) {
         global $wpdb; $t = CMH_Core::tables();
-        $column = ( $column === 'payment_status' ) ? 'payment_status' : 'maintenance_type';
-        $rows   = $wpdb->get_results(
+        $allowed = [ 'maintenance_type', 'payment_status', 'failure_system' ];
+        if ( ! in_array( $column, $allowed, true ) ) $column = 'maintenance_type';
+
+        $rows = $wpdb->get_results(
             "SELECT $column AS k, COUNT(*) AS n FROM {$t['interventions']} GROUP BY $column"
         );
         $out = [];
         foreach ( $rows as $r ) $out[ strtolower( (string) $r->k ) ] = (int) $r->n;
         return $out;
     }
-
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -293,92 +391,79 @@ class CMH_Taxonomy {
     }
 
     public static function render_settings_panels() {
-        self::render_list_panel( 'mtypes' );
-        self::render_list_panel( 'pstates' );
+        foreach ( [ 'mtypes', 'pstates', 'systems' ] as $which ) self::render_list_panel( $which );
     }
 
     private static function render_list_panel( $which ) {
-        $is_mtype = ( $which === 'mtypes' );
-        $rows     = $is_mtype ? self::mtypes() : self::pstates();
-        $usage    = self::usage_counts( $is_mtype ? 'maintenance_type' : 'payment_status' );
+        $c     = self::list_config( $which );
+        $rows  = self::read_list( $which );
+        $usage = self::usage_counts( $c['column'] );
 
-        $title = $is_mtype ? 'Tipos de mantenimiento' : 'Estados de pago';
-        $intro = $is_mtype
-            ? 'Cada tipo decide si <strong>descuenta disponibilidad</strong>, que es lo único con consecuencias sobre los indicadores: lo que descuenta se calcula como una avería. Puedes renombrar los de siempre y agregar los tuyos.'
-            : 'Son las etapas del proceso de cobro —pendiente de cotización, de orden de compra, de formato…—. El dinero se sigue calculando como costo menos abonado; la etapa solo dice en qué punto va. Marca «Anulado» solo en lo que ya no se piensa cobrar.';
-
-        echo '<div class="cmh-panel"><h2>' . esc_html( $title ) . '</h2>'
-            . '<p class="cmh-hint">' . $intro . '</p>';
+        echo '<div class="cmh-panel"><h2>' . esc_html( $c['title'] ) . '</h2>'
+            . '<p class="cmh-hint">' . $c['intro'] . '</p>';
 
         CMH_Admin::form_start( 'cm_save_taxonomy' );
         echo '<input type="hidden" name="which" value="' . esc_attr( $which ) . '">';
 
         echo '<div class="cmh-table-scroll"><table class="widefat cmh cmh-taxonomy-table"><thead><tr>'
-            . '<th>Nombre</th>'
-            . '<th style="width:120px">Color</th>'
-            . '<th style="width:230px">' . ( $is_mtype ? '¿Descuenta disponibilidad?' : 'Frente al dinero' ) . '</th>'
+            . '<th>Nombre</th><th style="width:120px">Color</th>'
+            . ( $c['head'] ? '<th style="width:230px">' . esc_html( $c['head'] ) . '</th>' : '' )
             . '<th style="width:150px">En uso</th>'
             . '</tr></thead><tbody>';
 
         $i = 0;
-        foreach ( $rows as $slug => $cfg ) {
-            self::render_list_row( $which, $i++, $slug, $cfg, $usage[ $slug ] ?? 0 );
-        }
-        // Filas en blanco para agregar. Generosas: agregar tipos es justo el punto.
-        for ( $n = 0; $n < 10; $n++ ) {
-            self::render_list_row( $which, $i++, '', [], 0 );
-        }
+        foreach ( $rows as $slug => $cfg ) self::render_list_row( $which, $i++, $slug, $cfg, $usage[ $slug ] ?? 0 );
+        // Filas en blanco de sobra: agregar entradas es justo el punto de esta pantalla.
+        for ( $n = 0; $n < 12; $n++ ) self::render_list_row( $which, $i++, '', [], 0 );
 
         echo '</tbody></table></div>'
             . '<p class="cmh-hint" style="margin-top:10px">Para <strong>quitar</strong> una fila, borra su nombre y guarda. '
-            . 'Lo que ya esté registrado con esa clave se sigue viendo, con su nombre interno. '
-            . ( $is_mtype
-                ? 'Ojo: cambiar si un tipo descuenta disponibilidad altera los indicadores ya calculados de todas las máquinas que lo usen.'
-                : 'La clave interna no cambia aunque renombres la etapa, así que no se pierde nada de lo ya guardado.' )
-            . '</p>'
-            . '<button class="button button-primary">Guardar ' . ( $is_mtype ? 'tipos' : 'estados' ) . '</button></form></div>';
+            . 'Lo que ya esté registrado con esa clave se sigue viendo. ' . $c['foot'] . '</p>'
+            . '<button class="button button-primary">Guardar ' . esc_html( mb_strtolower( $c['title'] ) ) . '</button></form></div>';
     }
 
     private static function render_list_row( $which, $i, $slug, $cfg, $used ) {
-        $is_mtype = ( $which === 'mtypes' );
-        $name     = 'rows[' . $i . ']';
-        $label    = $cfg['label'] ?? '';
+        $c     = self::list_config( $which );
+        $name  = 'rows[' . $i . ']';
+        $label = $cfg['label'] ?? '';
 
         echo '<tr>'
             . '<td><input type="hidden" name="' . esc_attr( $name ) . '[slug]" value="' . esc_attr( $slug ) . '">'
             . '<input type="text" name="' . esc_attr( $name ) . '[label]" value="' . esc_attr( $label ) . '" '
-            . 'placeholder="' . ( $is_mtype ? 'Garantía, Siniestro, Instalación…' : 'Pendiente de cotización…' ) . '" style="width:100%">'
+            . 'placeholder="' . esc_attr( $c['ph'] ) . '" style="width:100%">'
             . ( $slug ? '<br><code class="cmh-slug">' . esc_html( $slug ) . '</code>' : '' )
             . '</td>'
             . '<td><select name="' . esc_attr( $name ) . '[color]">';
         foreach ( self::color_options() as $ck => $cl )
             echo '<option value="' . esc_attr( $ck ) . '" ' . selected( $cfg['color'] ?? 'gray', $ck, false ) . '>' . esc_html( $cl ) . '</option>';
-        echo '</select></td><td>';
+        echo '</select></td>';
 
-        if ( $is_mtype ) {
-            echo '<label class="cmh-inline-check"><input type="checkbox" name="' . esc_attr( $name ) . '[affects]" value="1" '
-                . checked( ! empty( $cfg['affects'] ), true, false ) . '> Sí, cuenta como avería</label>';
-        } else {
-            echo '<select name="' . esc_attr( $name ) . '[money]">';
+        if ( $c['extra'] === 'affects' ) {
+            echo '<td><label class="cmh-inline-check"><input type="checkbox" name="' . esc_attr( $name ) . '[affects]" value="1" '
+                . checked( ! empty( $cfg['affects'] ), true, false ) . '> Sí, cuenta como avería</label></td>';
+        } elseif ( $c['extra'] === 'money' ) {
+            echo '<td><select name="' . esc_attr( $name ) . '[money]">';
             foreach ( self::MONEY_MODES as $mk => $ml )
                 echo '<option value="' . esc_attr( $mk ) . '" ' . selected( $cfg['money'] ?? 'pending', $mk, false ) . '>' . esc_html( $ml ) . '</option>';
-            echo '</select>';
+            echo '</select></td>';
         }
 
-        echo '</td><td>' . ( $used
+        echo '<td>' . ( $used
             ? '<span class="cmh-badge" style="background:#e7f0fb;color:#1c4d80">' . intval( $used ) . ' registro(s)</span>'
-            : '<span style="color:#a7aaad;font-size:12px">—</span>' ) . '</td></tr>';
+            : '<span class="cmh-muted">—</span>' ) . '</td></tr>';
     }
 
     public static function save_taxonomy() {
         CMH_Admin::check();
-        $which = ( ( $_POST['which'] ?? '' ) === 'mtypes' ) ? 'mtypes' : 'pstates';
+        $which = sanitize_key( $_POST['which'] ?? '' );
+        if ( ! in_array( $which, [ 'mtypes', 'pstates', 'systems' ], true ) ) $which = 'mtypes';
+
+        $c     = self::list_config( $which );
         $saved = self::save_list( $which, $_POST['rows'] ?? [] );
 
         CMH_Admin::redirect_to(
             CMH_Admin::admin_url( CMH_SLUG . '-settings' ),
-            sprintf( '%s guardados: %d en la lista.',
-                $which === 'mtypes' ? 'Tipos de mantenimiento' : 'Estados de pago', count( $saved ) )
+            sprintf( '%s guardados: %d en la lista.', $c['title'], count( $saved ) )
         );
     }
 }

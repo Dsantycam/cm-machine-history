@@ -600,33 +600,23 @@ class CMH_Schedule {
 
         CMH_Admin::page_header( 'Ajustes' );
 
-        echo '<div class="cmh-hero-block"><div>'
-            . '<div class="cmh-kicker">Configuración</div>'
-            . '<h2>Alertas y mantenimiento recurrente</h2>'
-            . '<p>Revisión diaria de mantenimientos y tareas, con aviso por correo.</p>'
+        echo '<div class="cmh-head"><div class="cmh-head-info">'
+            . '<div class="cmh-head-title"><h2>Ajustes</h2></div>'
+            . '<p class="cmh-head-meta"><span>Alertas, tareas automáticas, horas y las listas del plugin</span>'
+            . '<span>Proceso diario: <strong>' . esc_html( $next ) . '</strong></span></p>'
             . '</div></div>';
 
         // Estado del job.
         $cron_ok = (bool) wp_next_scheduled( self::CRON_HOOK );
-        echo '<div class="cmh-panel"><h2>Estado del proceso diario</h2>'
-            . '<div class="cmh-info-grid">'
-            . '<div><span>Job programado</span><strong>' . ( $cron_ok
-                ? '<span style="color:#1a6630">Activo</span>'
-                : '<span style="color:#d63638">No programado</span>' ) . '</strong></div>'
-            . '<div><span>Próxima ejecución</span><strong>' . esc_html( $next ?: '—' ) . '</strong></div>'
-            . '<div><span>Última ejecución</span><strong>' . esc_html( $s['last_run'] ?: 'Nunca' ) . '</strong></div>'
-            . '</div>'
-            . ( $s['last_summary'] ? '<div class="cmh-note" style="margin-top:12px"><strong>Último resultado:</strong> ' . esc_html( $s['last_summary'] ) . '</div>' : '' )
-            . '<p style="font-size:12px;color:#646970;margin:12px 0 0">WP-Cron depende de las visitas al sitio: en sitios con poco tráfico el job puede dispararse más tarde de la hora prevista ('
-            . sprintf( '%02d:00', self::CRON_HOUR ) . '). El proceso solo se ejecuta una vez al día.</p>';
+        // v2.4 — Las mismas secciones, en pestañas: la página había crecido a
+        // seis bloques largos y encontrar un ajuste obligaba a recorrerla entera.
+        echo '<div class="cmh-tabs-wrapper"><div class="cmh-tabs">'
+            . '<a href="#tab-alertas" class="cmh-tab" data-tab="alertas">Alertas y tareas</a>'
+            . '<a href="#tab-listas"  class="cmh-tab" data-tab="listas">Listas configurables</a>'
+            . '<a href="#tab-estado"  class="cmh-tab" data-tab="estado">Estado y vista previa</a>'
+            . '</div>';
 
-        CMH_Admin::form_start( 'cm_run_alerts' );
-        echo '<input type="hidden" name="redirect_to" value="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-settings' ) ) . '">'
-            . '<p style="margin:14px 0 0"><button class="button button-primary">Ejecutar ahora</button> '
-            . '<span style="font-size:12px;color:#646970;margin-left:8px">Corre el ciclo completo y envía los correos de inmediato.</span></p>'
-            . '</form></div>';
-
-        // Formulario de ajustes.
+        echo '<div id="tab-alertas" class="cmh-tab-panel">';
         echo '<div class="cmh-panel"><h2>Alertas por correo</h2>';
         CMH_Admin::form_start( 'cm_save_settings' );
         echo '<input type="hidden" name="redirect_to" value="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-settings' ) ) . '">'
@@ -690,7 +680,32 @@ class CMH_Schedule {
             . '<button class="button button-primary">Guardar ajustes</button></form></div>';
 
         // v2.3 — Listas configurables: tipos de mantenimiento y estados de pago.
+        echo '</div>';
+
+        echo '<div id="tab-listas" class="cmh-tab-panel">';
         CMH_Taxonomy::render_settings_panels();
+        echo '</div>';
+
+        echo '<div id="tab-estado" class="cmh-tab-panel">';
+        echo '<div class="cmh-panel"><h2>Estado del proceso diario</h2>'
+            . '<div class="cmh-info-grid">'
+            . '<div><span>Job programado</span><strong>' . ( $cron_ok
+                ? '<span style="color:#1a6630">Activo</span>'
+                : '<span style="color:#d63638">No programado</span>' ) . '</strong></div>'
+            . '<div><span>Próxima ejecución</span><strong>' . esc_html( $next ?: '—' ) . '</strong></div>'
+            . '<div><span>Última ejecución</span><strong>' . esc_html( $s['last_run'] ?: 'Nunca' ) . '</strong></div>'
+            . '</div>'
+            . ( $s['last_summary'] ? '<div class="cmh-note" style="margin-top:12px"><strong>Último resultado:</strong> ' . esc_html( $s['last_summary'] ) . '</div>' : '' )
+            . '<p style="font-size:12px;color:#646970;margin:12px 0 0">WP-Cron depende de las visitas al sitio: en sitios con poco tráfico el job puede dispararse más tarde de la hora prevista ('
+            . sprintf( '%02d:00', self::CRON_HOUR ) . '). El proceso solo se ejecuta una vez al día.</p>';
+
+        CMH_Admin::form_start( 'cm_run_alerts' );
+        echo '<input type="hidden" name="redirect_to" value="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-settings' ) ) . '">'
+            . '<p style="margin:14px 0 0"><button class="button button-primary">Ejecutar ahora</button> '
+            . '<span style="font-size:12px;color:#646970;margin-left:8px">Corre el ciclo completo y envía los correos de inmediato.</span></p>'
+            . '</form></div>';
+
+        // Formulario de ajustes.
 
         // Vista previa de lo que se enviaría hoy.
         $machines = self::due_machines( $days );
@@ -705,6 +720,8 @@ class CMH_Schedule {
                 . self::tasks_table_html( $tasks, true );
         }
         echo '</div>';
+        echo '</div></div>';   // cierra el panel y .cmh-tabs-wrapper
+
 
         CMH_Admin::page_footer();
     }
