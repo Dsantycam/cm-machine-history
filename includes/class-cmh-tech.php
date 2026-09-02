@@ -61,6 +61,21 @@ class CMH_Tech {
         ) ) );
     }
 
+    /**
+     * v2.2 — Técnico principal de la máquina: a él van las tareas automáticas.
+     * Si nadie está marcado, se cae al primero asignado, que es como se comportaba
+     * hasta la v2.1. Devuelve 0 si la máquina no tiene técnicos.
+     */
+    public static function primary_user_id( $machine_id ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $id = (int) $wpdb->get_var( $wpdb->prepare(
+            "SELECT user_id FROM {$t['assignments']} WHERE machine_id=%d AND is_primary=1 LIMIT 1", $machine_id
+        ) );
+        if ( $id ) return $id;
+        $ids = self::assigned_user_ids( $machine_id );
+        return $ids ? (int) $ids[0] : 0;
+    }
+
     /** Objetos WP_User asignados a una máquina. */
     public static function machine_techs( $machine_id ) {
         $ids = self::assigned_user_ids( $machine_id );

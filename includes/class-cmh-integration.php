@@ -231,20 +231,17 @@ class CMH_Integration {
         elseif ( ! $machine )                  $warnings[] = 'El código «' . $machine_code . '» no existe en el sistema.';
 
         // ── Tipo de mantenimiento ─────────────────────────────────────────────
+        // v2.2 — Reglas en orden: gana la primera que se cumpla. Si ninguna lo
+        // hace, queda el tipo por defecto del formato. Lo que hasta la v2.1 era
+        // «un campo + tabla de valores» se migra solo a reglas con «es igual a».
         $maintenance_type = $cfg['maintenance_type'];
-        if ( ! empty( $cfg['type_field'] ) ) {
-            $selected = self::selected_values( self::field( $data, $cfg['type_field'] ) );
-            $matched  = false;
-            // El orden del mapa es la prioridad: gana la primera coincidencia.
-            foreach ( (array) $cfg['type_map'] as $needle => $mapped ) {
-                if ( in_array( self::norm( $needle ), $selected, true ) ) {
-                    $maintenance_type = $mapped;
-                    $matched          = true;
-                    break;
-                }
-            }
-            if ( ! $matched && $selected ) {
-                $warnings[] = 'El valor «' . implode( ', ', $selected ) . '» no está en la tabla de tipos: se usó «' . $maintenance_type . '».';
+        $rules            = (array) ( $cfg['type_rules'] ?? [] );
+        if ( $rules ) {
+            $hit = self::match_type_rules( $data, $rules );
+            if ( $hit !== '' ) {
+                $maintenance_type = $hit;
+            } else {
+                $warnings[] = 'Ninguna regla del tipo de mantenimiento se cumplió: se usó «' . $maintenance_type . '».';
             }
         }
 
@@ -296,6 +293,70 @@ class CMH_Integration {
     }
 
     /** Valores marcados de un checkbox/radio/select, normalizados para comparar. */
+    // =========================================================================
+    // Motor de reglas del tipo de mantenimiento (v2.2)
+    // =========================================================================
+
+    /**
+     * Evalúa las reglas en orden y devuelve el tipo de la primera que se cumpla,
+     * o '' si ninguna lo hace. El orden ES la prioridad: se sale al primer acierto.
+     */
+    public static function match_type_rules( $data, $rules ) {
+        foreach ( (array) $rules as $r ) {
+            if ( empty( $r['field'] ) || empty( $r['type'] ) ) continue;
+            if ( self::rule_matches( $data, $r ) ) return (string) $r['type'];
+        }
+        return '';
+    }
+
+    /**
+     * ¿Se cumple una regla sobre este envío?
+     *
+     * Las comparaciones de texto van contra `selected_values()`, que ya normaliza
+     * (minúsculas, sin acentos) y desarma los campos de opción múltiple. Así una
+     * regla escrita «Correctivo» reconoce igual un checkbox que llega como
+     * ['correctivo'] que un texto suelto «CORRECTIVO».
+     */
+    private static function rule_matches( $data, $rule ) {
+        $raw      = self::field( $data, $rule['field'] );
+        $selected = self::selected_values( $raw );
+        $needle   = self::norm( $rule['value'] ?? '' );
+        $whole    = self::norm( self::human( $raw ) );
+        $filled   = (bool) array_filter( $selected, function ( $v ) { return $v !== ''; } );
+
+        switch ( $rule['op'] ) {
+            case 'equals':
+                return in_array( $needle, $selected, true );
+
+            // «No es igual a» solo se cumple si HAY algo que comparar: un campo
+            // vacío no debería disparar una regla de desigualdad.
+            case 'not_equals':
+                return $filled && ! in_array( $needle, $selected, true );
+
+            // «Contiene» y «empieza por» miran el valor COMPLETO del campo, no
+            // palabra por palabra: si no, «empieza por general» se cumpliría con
+            // «Revisión General», que no es lo que nadie espera al escribir la
+            // regla. `equals` sí sigue mirando los valores sueltos, que es como
+            // se comparan los checkbox y como venía funcionando desde la v2.1.
+            case 'contains':
+                if ( $needle === '' ) return false;
+                return strpos( $whole, $needle ) !== false;
+
+            case 'starts_with':
+                if ( $needle === '' ) return false;
+                return strpos( $whole, $needle ) === 0;
+
+            case 'filled': return $filled;
+            case 'empty':  return ! $filled;
+
+            // Numéricos: se comparan sobre el valor crudo, con el mismo lector
+            // tolerante que usa el resto del plugin («1.234,5» incluido).
+            case 'gt': return self::to_float( $raw ) >  self::to_float( $rule['value'] ?? '' );
+            case 'lt': return self::to_float( $raw ) <  self::to_float( $rule['value'] ?? '' );
+        }
+        return false;
+    }
+
     private static function selected_values( $raw ) {
         if ( is_array( $raw ) ) {
             $vals = array_map( [ __CLASS__, 'norm' ], array_map( [ __CLASS__, 'human' ], $raw ) );

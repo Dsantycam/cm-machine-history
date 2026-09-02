@@ -32,6 +32,7 @@ class CMH_Admin {
         add_action( 'admin_post_cm_delete_company',    [ __CLASS__, 'delete_company' ] );
         add_action( 'admin_post_cm_assign_tech',       [ __CLASS__, 'assign_tech' ] );
         add_action( 'admin_post_cm_unassign_tech',     [ __CLASS__, 'unassign_tech' ] );
+        add_action( 'admin_post_cm_set_primary_tech',  [ __CLASS__, 'set_primary_tech' ] );
         add_action( 'admin_post_cm_save_task',         [ __CLASS__, 'save_task' ] );
         add_action( 'admin_post_cm_update_task',       [ __CLASS__, 'update_task' ] );
         add_action( 'admin_post_cm_delete_task',       [ __CLASS__, 'delete_task' ] );
@@ -154,6 +155,88 @@ class CMH_Admin {
         $labels = [ 'activa' => 'Activa', 'mantenimiento' => 'En mantenimiento', 'inactiva' => 'Inactiva', 'fuera_servicio' => 'Fuera de servicio' ];
         $label  = $labels[ $status ] ?? ucfirst( str_replace( '_', ' ', $status ) );
         return '<span class="cmh-badge cmh-status-' . esc_attr( $status ) . '">' . esc_html( $label ) . '</span>';
+    }
+
+    // =========================================================================
+    // Datos de contacto de empresa y sucursal (v2.2)
+    // =========================================================================
+
+    /**
+     * Columnas de contacto/ubicación comunes a empresa y sucursal, y las de
+     * facturación, que solo existen a nivel de empresa.
+     */
+    public static function contact_columns( $with_billing = false ) {
+        $cols = [
+            'contact_name'   => [ 'Encargado',                 'text',     'Nombre de quien recibe al técnico' ],
+            'contact_role'   => [ 'Cargo del encargado',       'text',     'Jefe de mantenimiento, almacenista…' ],
+            'contact_phone'  => [ 'Teléfono',                  'text',     '' ],
+            'contact_mobile' => [ 'Celular / WhatsApp',        'text',     '' ],
+            'contact_email'  => [ 'Correo',                    'email',    '' ],
+            'contact2_name'  => [ 'Segundo contacto',          'text',     'Respaldo si el principal no responde' ],
+            'contact2_phone' => [ 'Teléfono del segundo',      'text',     '' ],
+            'contact2_email' => [ 'Correo del segundo',        'email',    '' ],
+            'address'        => [ 'Dirección',                 'text',     '' ],
+            'area'           => [ 'Barrio / zona',             'text',     '' ],
+            'access_notes'   => [ 'Notas de acceso',           'textarea', 'Portería, horario de ingreso, qué preguntar al llegar' ],
+        ];
+        if ( $with_billing ) {
+            $cols['tax_id']        = [ 'NIT / identificación',   'text', '' ];
+            $cols['legal_name']    = [ 'Razón social',           'text', 'Si difiere del nombre comercial' ];
+            $cols['billing_email'] = [ 'Correo de facturación',  'email', '' ];
+            $cols['payment_terms'] = [ 'Condiciones de pago',    'text', 'Crédito 30 días, contado…' ];
+        }
+        return $cols;
+    }
+
+    /**
+     * Pinta los campos de contacto. `$inherit_from` recibe la fila de la empresa
+     * cuando se está editando una sucursal: lo que quede vacío aquí hereda de
+     * allí, y se le dice al usuario para que no lo escriba dos veces.
+     */
+    public static function contact_fields_form( $row, $with_billing = false, $inherit_from = null ) {
+        $cols = self::contact_columns( $with_billing );
+
+        echo '<div class="cmh-form-section"><p class="cmh-form-section-title">Contacto y ubicación</p>';
+        if ( $inherit_from ) {
+            echo '<p style="font-size:12px;color:#646970;margin:0 0 10px">Lo que dejes vacío aquí toma el valor de la empresa <strong>'
+                . esc_html( $inherit_from->name ) . '</strong>. Escribe solo lo que cambie en esta sucursal.</p>';
+        }
+
+        echo '<div class="cmh-form-grid">';
+        foreach ( $cols as $key => $meta ) {
+            list( $label, $type, $hint ) = $meta;
+            $value = ( $row && isset( $row->$key ) ) ? (string) $row->$key : '';
+
+            // Marca de agua con lo que se heredaría si se deja vacío.
+            $ph = $hint;
+            if ( $inherit_from && isset( $inherit_from->$key ) && (string) $inherit_from->$key !== '' ) {
+                $ph = 'Hereda: ' . (string) $inherit_from->$key;
+            }
+
+            if ( $type === 'textarea' ) {
+                echo '</div><label>' . esc_html( $label )
+                    . '<textarea name="' . esc_attr( $key ) . '" rows="2" placeholder="' . esc_attr( $ph ) . '">'
+                    . esc_textarea( $value ) . '</textarea></label><div class="cmh-form-grid">';
+                continue;
+            }
+            echo '<label>' . esc_html( $label )
+                . '<input type="' . esc_attr( $type ) . '" name="' . esc_attr( $key ) . '" value="' . esc_attr( $value ) . '" '
+                . 'placeholder="' . esc_attr( $ph ) . '"></label>';
+        }
+        echo '</div></div>';
+    }
+
+    /** Los mismos campos, leídos del POST y saneados según su tipo. */
+    public static function contact_fields_from_post( $with_billing = false ) {
+        $out = [];
+        foreach ( self::contact_columns( $with_billing ) as $key => $meta ) {
+            $type = $meta[1];
+            $raw  = $_POST[ $key ] ?? '';
+            if ( $type === 'textarea' )   $out[ $key ] = sanitize_textarea_field( $raw );
+            elseif ( $type === 'email' )  $out[ $key ] = sanitize_email( $raw );
+            else                          $out[ $key ] = sanitize_text_field( $raw );
+        }
+        return $out;
     }
 
     public static function metric_card( $label, $value, $hint = '', $accent = '' ) {
@@ -422,8 +505,10 @@ class CMH_Admin {
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ) ) . '">'
             . '<label>Nombre <em>*</em></label><input name="name" value="' . esc_attr( $c->name ) . '" required class="cmh-uppercase">'
             . '<label>Código <em>*</em></label><input name="code" value="' . esc_attr( $c->code ) . '" maxlength="10" required class="cmh-uppercase">'
-            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>'
-            . '<button class="button button-primary">Guardar cambios</button></form>';
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>';
+        // v2.2 — Contacto, ubicación y facturación de la empresa.
+        self::contact_fields_form( $c, true );
+        echo '<button class="button button-primary">Guardar cambios</button></form>';
         echo '</div></div></div>';
         self::page_footer();
     }
@@ -471,8 +556,11 @@ class CMH_Admin {
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] ) ) . '">'
             . '<label>Nombre <em>*</em></label><input name="name" value="' . esc_attr( $city->name ) . '" required class="cmh-uppercase">'
             . '<label>Código <em>*</em></label><input name="code" value="' . esc_attr( $city->code ) . '" maxlength="10" required class="cmh-uppercase">'
-            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>'
-            . '<button class="button button-primary">Guardar cambios</button></form>';
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>';
+        // v2.2 — Contacto y ubicación de la sucursal, heredando de su empresa.
+        $parent_company = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['companies']} WHERE id=%d", (int) $city->company_id ) );
+        self::contact_fields_form( $city, false, $parent_company );
+        echo '<button class="button button-primary">Guardar cambios</button></form>';
         echo '</div></div></div>';
         self::page_footer();
     }
@@ -1287,6 +1375,9 @@ class CMH_Admin {
             'updated_at' => current_time( 'mysql' ),
         ] );
 
+        // v2.2 — Si la máquina nace con fecha de mantenimiento, su tarea también.
+        CMH_Schedule::sync_machine_task( (int) $wpdb->insert_id );
+
         self::redirect_to(
             self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => intval( $_POST['city_id'] ) ] ),
             'Máquina guardada. Código: ' . $machine_code
@@ -1390,6 +1481,9 @@ class CMH_Admin {
         }
 
         $wpdb->update( $t['machines'], $data, [ 'id' => $machine_id ] );
+
+        // v2.2 — La tarea del mantenimiento programado sigue a la fecha.
+        CMH_Schedule::sync_machine_task( $machine_id );
 
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Máquina actualizada.', $hm_warn );
     }
@@ -1564,6 +1658,8 @@ class CMH_Admin {
 
         if ( ! empty( $_POST['clear_date'] ) ) {
             $wpdb->update( $t['machines'], [ 'next_maintenance_date' => null, 'maintenance_interval_days' => $interval, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
+            // v2.2 — Sin fecha, la tarea automática pendiente ya no aplica.
+            CMH_Schedule::sync_machine_task( $machine_id );
             self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Fecha de mantenimiento eliminada.' );
         }
 
@@ -1572,11 +1668,16 @@ class CMH_Admin {
 
         $wpdb->update( $t['machines'], [ 'next_maintenance_date' => $date, 'maintenance_interval_days' => $interval, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
 
+        // v2.2 — La tarea del mantenimiento programado sigue a la fecha: se crea
+        // si no existía y se mueve si la fecha cambió.
+        $synced = CMH_Schedule::sync_machine_task( $machine_id );
+
         $msg = 'Mantenimiento programado para el ' . $date . '.';
         if ( $interval ) $msg .= ' Se repetirá automáticamente: ' . CMH_Schedule::interval_label( $interval ) . '.';
+        if ( $synced === 'created' )    $msg .= ' Se creó la tarea para el técnico principal.';
+        elseif ( $synced === 'moved' )  $msg .= ' La tarea existente se movió a esa fecha.';
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), $msg );
     }
-
     // =========================================================================
     // Buscar/asociar PDF de E2PDF manualmente para una intervención
     // =========================================================================
@@ -1662,20 +1763,23 @@ class CMH_Admin {
     public static function update_company() {
         self::check(); global $wpdb; $t = CMH_Core::tables();
         $id = intval( $_POST['company_id'] );
-        $wpdb->update( $t['companies'], [
+        // v2.2 — Junto al nombre y el código viajan los datos de contacto,
+        // ubicación y facturación, que ahora pueden llegar prellenados al formato.
+        $wpdb->update( $t['companies'], array_merge( [
             'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ),
             'code' => self::clean_code( $_POST['code'] ),
-        ], [ 'id' => $id ] );
+        ], self::contact_fields_from_post( true ) ), [ 'id' => $id ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $id ] ), 'Empresa actualizada.' );
     }
 
     public static function update_city() {
         self::check(); global $wpdb; $t = CMH_Core::tables();
         $id   = intval( $_POST['city_id'] );
-        $wpdb->update( $t['cities'], [
+        // v2.2 — Sin facturación: eso se le factura a la empresa, no a la sede.
+        $wpdb->update( $t['cities'], array_merge( [
             'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ),
             'code' => self::clean_code( $_POST['code'] ),
-        ], [ 'id' => $id ] );
+        ], self::contact_fields_from_post( false ) ), [ 'id' => $id ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $id ] ), 'Ciudad/Sucursal actualizada.' );
     }
 
@@ -1764,9 +1868,24 @@ class CMH_Admin {
         }
 
         if ( $assigned ) {
-            echo '<table class="widefat cmh" style="margin-bottom:14px"><thead><tr><th>Técnico</th><th>Email</th><th></th></tr></thead><tbody>';
+            // v2.2 — El técnico principal es a quien se le asignan las tareas
+            // automáticas del mantenimiento programado.
+            $primary_id = CMH_Tech::primary_user_id( $machine_id );
+            echo '<table class="widefat cmh" style="margin-bottom:14px"><thead><tr><th style="width:90px">Principal</th><th>Técnico</th><th>Email</th><th></th></tr></thead><tbody>';
             foreach ( $assigned as $u ) {
-                echo '<tr><td><strong>' . esc_html( $u->display_name ) . '</strong></td>'
+                $is_primary = (int) $u->ID === $primary_id;
+                echo '<tr><td>'
+                    . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">'
+                    . '<input type="hidden" name="action" value="cm_set_primary_tech">'
+                    . '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+                    . '<input type="hidden" name="user_id" value="' . intval( $u->ID ) . '">'
+                    . '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">'
+                    . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                    . ( $is_primary
+                        ? '<span class="cmh-badge" style="background:#e6f4ea;color:#1a6630">Principal</span>'
+                        : '<button class="button button-small" title="Hacer principal a este técnico">Marcar</button>' )
+                    . '</form></td>'
+                    . '<td><strong>' . esc_html( $u->display_name ) . '</strong></td>'
                     . '<td style="font-size:12px;color:#646970">' . esc_html( $u->user_email ) . '</td>'
                     . '<td><form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Quitar la asignación de este técnico?\')">'
                     . '<input type="hidden" name="action" value="cm_unassign_tech">'
@@ -1778,6 +1897,7 @@ class CMH_Admin {
                     . '</form></td></tr>';
             }
             echo '</tbody></table>';
+            echo '<p style="font-size:12px;color:#646970;margin:-6px 0 14px">El técnico <strong>principal</strong> recibe las tareas que se crean solas al programar un mantenimiento. Si no marcas ninguno, se usa el primero de la lista.</p>';
         } else {
             echo '<p style="color:#646970;font-size:13px;margin:0 0 14px">Ningún técnico asignado todavía.</p>';
         }
@@ -1906,6 +2026,26 @@ class CMH_Admin {
         $user_id    = intval( $_POST['user_id'] );
         $wpdb->delete( $t['assignments'], [ 'machine_id' => $machine_id, 'user_id' => $user_id ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Asignación eliminada.' );
+    }
+
+    /**
+     * v2.2 — Marca al técnico principal de una máquina. Solo puede haber uno, así
+     * que primero se limpia la marca de los demás.
+     */
+    public static function set_primary_tech() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $machine_id = intval( $_POST['machine_id'] );
+        $user_id    = intval( $_POST['user_id'] );
+        if ( ! $machine_id || ! $user_id ) wp_die( 'Datos incompletos.' );
+
+        $wpdb->update( $t['assignments'], [ 'is_primary' => 0 ], [ 'machine_id' => $machine_id ] );
+        $done = $wpdb->update( $t['assignments'], [ 'is_primary' => 1 ], [ 'machine_id' => $machine_id, 'user_id' => $user_id ] );
+
+        self::redirect_to(
+            self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ),
+            $done ? 'Técnico principal actualizado.' : '',
+            $done ? '' : 'Ese técnico no está asignado a la máquina.'
+        );
     }
 
     /** v2.0 — Formato elegido para la tarea; null si se deja «el técnico elige». */
