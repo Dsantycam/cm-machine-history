@@ -237,4 +237,31 @@
         if (this.setSelectionRange) this.setSelectionRange(pos, pos);
     });
 
+    // ─── Formatos: reglas del tipo de mantenimiento ───────────────────────────
+    // Los operadores «está vacío» / «no está vacío» no comparan contra nada, así
+    // que su casilla de valor se apaga para no dar a entender que hace falta.
+    function syncRuleRow($op) {
+        var unary = $op.find('option:selected').data('unary') === 1;
+        var $val  = $op.closest('tr').find('.cmh-rule-value');
+        $val.prop('disabled', unary).attr('placeholder', unary ? 'no aplica' : 'valor a comparar');
+        if (unary) $val.val('');
+    }
+
+    // ─── Formatos: autorrelleno con texto fijo ───────────────────────────────
+    function syncPrefillRow($sel) {
+        var literal = $sel.val() === 'literal';
+        var $txt    = $sel.closest('tr').find('.cmh-prefill-literal');
+        $txt.prop('disabled', !literal)
+            .attr('placeholder', literal ? 'texto que se escribirá siempre' : 'solo si eliges «Texto fijo»');
+        if (!literal) $txt.val('');
+    }
+
+    $(document).on('change', '.cmh-rule-op', function () { syncRuleRow($(this)); });
+    $(document).on('change', '.cmh-prefill-source', function () { syncPrefillRow($(this)); });
+
+    $(function () {
+        $('.cmh-rule-op').each(function () { syncRuleRow($(this)); });
+        $('.cmh-prefill-source').each(function () { syncPrefillRow($(this)); });
+    });
+
 })(jQuery);

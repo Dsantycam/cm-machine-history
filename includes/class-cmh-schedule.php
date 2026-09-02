@@ -66,6 +66,7 @@ class CMH_Schedule {
             'alert_to_techs'    => 1,   // correo individual a cada técnico asignado
             'auto_task'         => 1,   // auto-generar tarea al vencer el mantenimiento
             'auto_task_title'   => 'Mantenimiento preventivo programado',
+            'auto_task_when'    => 'immediate', // 'immediate' o 'window'
             'time_max_hours'    => 12,  // tope por tramo de trabajo del técnico
             'last_run'          => '',  // 'Y-m-d H:i:s' (hora local del sitio)
             'last_summary'      => '',  // resumen legible de la última corrida
@@ -147,6 +148,7 @@ class CMH_Schedule {
             [ 'next_maintenance_date' => $next, 'updated_at' => current_time( 'mysql' ) ],
             [ 'id' => (int) $machine_id ]
         );
+        CMH_Schedule::sync_machine_task( (int) $machine_id );
         return $next;
     }
 
@@ -257,6 +259,13 @@ class CMH_Schedule {
         // (el técnico abrió la tarea y nunca la marcó como completada).
         if ( class_exists( 'CMH_Time' ) ) CMH_Time::close_stale();
 
+        // v2.2 — En modo «inmediato», pone al día las máquinas cuya fecha se
+        // programó antes de activar esta versión, y mueve las tareas cuya fecha
+        // haya cambiado por fuera del panel.
+        if ( self::setting( 'auto_task' ) && self::setting( 'auto_task_when' ) === 'immediate' ) {
+            self::sync_all_tasks();
+        }
+
         $days     = max( 0, (int) $s['alert_days_before'] );
         $machines = self::due_machines( $days );
         $created  = ! empty( $s['auto_task'] ) ? self::create_auto_tasks( $machines ) : 0;
@@ -290,33 +299,133 @@ class CMH_Schedule {
      * reejecutar el job el mismo ciclo no duplica tareas. Si hay técnicos asignados,
      * la tarea queda para el primero de ellos.
      */
-    private static function create_auto_tasks( $machines ) {
+    // =========================================================================
+    // Tarea del mantenimiento programado (v2.2)
+    // =========================================================================
+
+    /**
+     * Mantiene sincronizada la tarea automática de una máquina con su fecha de
+     * próximo mantenimiento. Se llama cada vez que esa fecha puede haber cambiado.
+     *
+     * Hasta la v2.1 la tarea solo nacía cuando la fecha entraba en la ventana de
+     * alerta, así que programar un mantenimiento a tres meses no mostraba nada.
+     * Ahora, en el modo «inmediato» (el de fábrica), la tarea existe desde que se
+     * guarda la fecha y **se mueve con ella** en vez de dejar huérfana la anterior.
+     *
+     * Devuelve 'created', 'moved', 'removed' o '' si no hizo nada.
+     */
+    public static function sync_machine_task( $machine_id ) {
         global $wpdb; $t = CMH_Core::tables();
+        $machine_id = (int) $machine_id;
+        if ( ! $machine_id || ! self::setting( 'auto_task' ) ) return '';
+
+        $m = $wpdb->get_row( $wpdb->prepare(
+            "SELECT id, machine_code, status, next_maintenance_date, maintenance_interval_days
+             FROM {$t['machines']} WHERE id=%d", $machine_id
+        ) );
+        if ( ! $m ) return '';
+
+        // La tarea automática viva de esta máquina, si la hay.
+        $task = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND source='auto' AND status<>'completada'
+             ORDER BY id DESC LIMIT 1", $machine_id
+        ) );
+
+        $inactive = in_array( $m->status, [ 'inactiva', 'fuera_servicio' ], true );
+        $date     = $m->next_maintenance_date;
+
+        // Sin fecha, o máquina fuera de juego: la tarea pendiente ya no aplica.
+        if ( ! $date || $inactive ) {
+            if ( $task && $task->status === 'pendiente' && ! self::task_has_time( (int) $task->id ) ) {
+                $wpdb->delete( $t['tasks'], [ 'id' => (int) $task->id ] );
+                return 'removed';
+            }
+            return '';
+        }
+
+        // Ya existe: basta con moverla si la fecha cambió. No se toca el técnico
+        // ni el estado, que pueden haberse ajustado a mano.
+        if ( $task ) {
+            if ( $task->due_date === $date ) return '';
+            $wpdb->update( $t['tasks'],
+                [ 'due_date' => $date, 'updated_at' => current_time( 'mysql' ) ],
+                [ 'id' => (int) $task->id ]
+            );
+            return 'moved';
+        }
+
+        // No existe. En modo «inmediato» se crea ya; en modo «ventana» se deja
+        // para el proceso diario, que es quien mira la anticipación.
+        if ( self::setting( 'auto_task_when' ) !== 'immediate' ) return '';
+
+        return self::insert_auto_task( $m ) ? 'created' : '';
+    }
+
+    /** ¿La tarea tiene tramos de horas registrados? Si los tiene, no se borra. */
+    private static function task_has_time( $task_id ) {
+        global $wpdb; $t = CMH_Core::tables();
+        if ( empty( $t['task_time'] ) ) return false;
+        return (bool) $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM {$t['task_time']} WHERE task_id=%d LIMIT 1", (int) $task_id
+        ) );
+    }
+
+    /**
+     * Inserta la tarea automática de una máquina. Idempotente por (máquina,
+     * origen automático, fecha): no duplica si ya existe una para esa fecha.
+     */
+    private static function insert_auto_task( $m ) {
+        global $wpdb; $t = CMH_Core::tables();
+
+        $exists = $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM {$t['tasks']} WHERE machine_id=%d AND source='auto' AND due_date=%s LIMIT 1",
+            $m->id, $m->next_maintenance_date
+        ) );
+        if ( $exists ) return false;
+
         $title_base = self::setting( 'auto_task_title' ) ?: 'Mantenimiento preventivo programado';
-        $created    = 0;
 
+        $wpdb->insert( $t['tasks'], [
+            'machine_id'  => (int) $m->id,
+            // v2.2 — Al técnico principal de la máquina, no al primero de la lista.
+            'assigned_to' => CMH_Tech::primary_user_id( (int) $m->id ) ?: null,
+            'title'       => $title_base . ' — ' . $m->machine_code,
+            'notes'       => 'Tarea generada automáticamente por la fecha de próximo mantenimiento ('
+                           . $m->next_maintenance_date . ')'
+                           . ( $m->maintenance_interval_days ? '. Recurrencia: ' . self::interval_label( $m->maintenance_interval_days ) . '.' : '.' ),
+            'due_date'    => $m->next_maintenance_date,
+            'status'      => 'pendiente',
+            'source'      => 'auto',
+            'created_by'  => null,
+        ] );
+        return ! $wpdb->last_error;
+    }
+
+    /**
+     * Pone al día todas las máquinas de una vez. Lo usa el proceso diario en modo
+     * «inmediato», para que las fechas programadas antes de activar esta versión
+     * también tengan su tarea.
+     */
+    public static function sync_all_tasks() {
+        global $wpdb; $t = CMH_Core::tables();
+        $ids = $wpdb->get_col(
+            "SELECT id FROM {$t['machines']}
+             WHERE next_maintenance_date IS NOT NULL AND status NOT IN ('inactiva','fuera_servicio')"
+        );
+        $n = 0;
+        foreach ( $ids as $id ) {
+            if ( self::sync_machine_task( (int) $id ) ) $n++;
+        }
+        return $n;
+    }
+
+    private static function create_auto_tasks( $machines ) {
+        $created = 0;
         foreach ( $machines as $m ) {
-            $exists = $wpdb->get_var( $wpdb->prepare(
-                "SELECT id FROM {$t['tasks']} WHERE machine_id=%d AND source='auto' AND due_date=%s LIMIT 1",
-                $m->id, $m->next_maintenance_date
-            ) );
-            if ( $exists ) continue;
-
-            $techs = CMH_Tech::assigned_user_ids( (int) $m->id );
-
-            $wpdb->insert( $t['tasks'], [
-                'machine_id'  => (int) $m->id,
-                'assigned_to' => $techs ? (int) $techs[0] : null,
-                'title'       => $title_base . ' — ' . $m->machine_code,
-                'notes'       => 'Tarea generada automáticamente por la fecha de próximo mantenimiento ('
-                               . $m->next_maintenance_date . ')'
-                               . ( $m->maintenance_interval_days ? '. Recurrencia: ' . self::interval_label( $m->maintenance_interval_days ) . '.' : '.' ),
-                'due_date'    => $m->next_maintenance_date,
-                'status'      => 'pendiente',
-                'source'      => 'auto',
-                'created_by'  => null,
-            ] );
-            if ( ! $wpdb->last_error ) $created++;
+            // v2.2 — La inserción vive en insert_auto_task, compartida con la
+            // sincronización inmediata, para que ambas rutas creen la tarea igual
+            // (mismo título, mismas notas y el técnico principal de la máquina).
+            if ( self::insert_auto_task( $m ) ) $created++;
         }
         return $created;
     }
@@ -541,10 +650,18 @@ class CMH_Schedule {
         echo '<div class="cmh-form-section">'
             . '<p class="cmh-form-section-title">Tareas automáticas</p>'
             . '<label><input type="checkbox" name="auto_task" value="1" ' . checked( $s['auto_task'], 1, false ) . '> '
-            . 'Crear una tarea automáticamente cuando el mantenimiento entre en la ventana de alerta</label>'
+            . 'Crear una tarea automáticamente para cada mantenimiento programado</label>'
             . '<label>Título de la tarea generada'
             . '<input type="text" name="auto_task_title" value="' . esc_attr( $s['auto_task_title'] ) . '" placeholder="Mantenimiento preventivo programado"></label>'
-            . '<p style="font-size:12px;color:#646970;margin:6px 0 0">Se le agrega el código de la máquina y se asigna al primer técnico asignado, si lo hay. No se duplica: una tarea por máquina y fecha programada.</p>'
+            . '<p style="font-size:12px;color:#646970;margin:10px 0 4px"><strong>¿Cuándo se crea?</strong></p>'
+            . '<label style="font-weight:400"><input type="radio" name="auto_task_when" value="immediate" '
+            . checked( $s['auto_task_when'], 'immediate', false ) . '> '
+            . 'Apenas se programe la fecha, aunque falten meses <span class="cmh-optional">(recomendado: ves el plan completo)</span></label>'
+            . '<label style="font-weight:400"><input type="radio" name="auto_task_when" value="window" '
+            . checked( $s['auto_task_when'], 'window', false ) . '> '
+            . 'Solo cuando entre en la ventana de alerta de arriba</label>'
+            . '<p style="font-size:12px;color:#646970;margin:6px 0 0">Si cambias la fecha de un mantenimiento, la tarea se mueve con ella en vez de quedar una vieja suelta. '
+            . 'La tarea se asigna al <strong>técnico principal</strong> de la máquina, que marcas en la pestaña Técnicos de su hoja de vida.</p>'
             . '</div>'
 
             . '<div class="cmh-form-section">'
@@ -590,6 +707,7 @@ class CMH_Schedule {
             'alert_to_techs'    => isset( $_POST['alert_to_techs'] ) ? 1 : 0,
             'auto_task'         => isset( $_POST['auto_task'] ) ? 1 : 0,
             'auto_task_title'   => sanitize_text_field( $_POST['auto_task_title'] ?? '' ) ?: 'Mantenimiento preventivo programado',
+            'auto_task_when'    => ( ( $_POST['auto_task_when'] ?? '' ) === 'window' ) ? 'window' : 'immediate',
             'time_max_hours'    => min( 24, max( 1, (int) ( $_POST['time_max_hours'] ?? 12 ) ) ),
         ] );
 
