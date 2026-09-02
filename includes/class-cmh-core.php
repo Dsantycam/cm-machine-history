@@ -21,6 +21,7 @@ class CMH_Core {
             'assignments'   => $p . 'assignments',
             'tasks'         => $p . 'tasks',
             'clients'       => $p . 'client_companies',
+            'client_cities' => $p . 'client_cities',
         ];
     }
 
@@ -170,6 +171,7 @@ class CMH_Core {
             due_date    DATE            NULL,
             status      VARCHAR(40)     NOT NULL DEFAULT 'pendiente',
             source      VARCHAR(20)     NOT NULL DEFAULT 'manual',
+            form_id     BIGINT UNSIGNED NULL,
             created_by  BIGINT UNSIGNED NULL,
             created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at  DATETIME        NULL,
@@ -191,11 +193,29 @@ class CMH_Core {
             KEY company_id (company_id)
         ) $c;" );
 
+        // v2.0 — Acceso de clientes acotado a ciudades/sucursales concretas.
+        // Convive con client_companies: el acceso efectivo es la UNIÓN de ambas
+        // (empresa completa por un lado, sucursales sueltas por el otro), de modo
+        // que se puede dar acceso solo a una sucursal sin abrir toda la empresa.
+        dbDelta( "CREATE TABLE {$t['client_cities']} (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id    BIGINT UNSIGNED NOT NULL,
+            city_id    BIGINT UNSIGNED NOT NULL,
+            created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY user_city (user_id, city_id),
+            KEY user_id (user_id),
+            KEY city_id (city_id)
+        ) $c;" );
+
         // Migrar branch_id a nullable en instalaciones existentes.
         self::run_migrations( $t );
 
         // v0.9 — Rol de técnico y capacidades.
         self::setup_roles();
+
+        // v2.0 — Siembra la configuración de formatos desde el mapeo histórico.
+        if ( class_exists( 'CMH_Forms' ) ) CMH_Forms::maybe_seed();
 
         // v0.11 — Job diario de alertas de mantenimiento.
         if ( class_exists( 'CMH_Schedule' ) ) CMH_Schedule::schedule_cron();
@@ -309,6 +329,13 @@ class CMH_Core {
         $cols = $wpdb->get_row( "SHOW COLUMNS FROM {$t['tasks']} LIKE 'source'" );
         if ( ! $cols ) {
             $wpdb->query( "ALTER TABLE {$t['tasks']} ADD COLUMN source VARCHAR(20) NOT NULL DEFAULT 'manual' AFTER status" );
+        }
+
+        // v2.0 — Formato de Forminator que corresponde a la tarea (opcional: si
+        // queda NULL, el técnico elige el formato al abrirla).
+        $colf = $wpdb->get_row( "SHOW COLUMNS FROM {$t['tasks']} LIKE 'form_id'" );
+        if ( ! $colf ) {
+            $wpdb->query( "ALTER TABLE {$t['tasks']} ADD COLUMN form_id BIGINT UNSIGNED NULL DEFAULT NULL AFTER source" );
         }
 
         // v1.0.1 — Concilia las intervenciones marcadas «Pagado» que quedaron con
