@@ -282,4 +282,275 @@
         $wrap.find('.cmh-view-' + view).show();
     });
 
+    /* ═══════════════════════════════════════════════════════════════════
+       v2.4 — Comportamiento de la interfaz
+       ═══════════════════════════════════════════════════════════════════ */
+
+    // ─── Ventana modal ────────────────────────────────────────────────────
+    // Los formularios de alta ya no viven en la columna estrecha de la
+    // derecha: el HTML está en la página, oculto, y se trae aquí al abrir.
+    // Se devuelve a su sitio al cerrar para no perder lo escrito ni romper
+    // los formularios que dependen de su posición en el DOM.
+    var $modalHost = null;
+
+    function closeModal() {
+        if (!$modalHost) return;
+        var $backdrop = $('.cmh-modal-backdrop');
+        var $content  = $backdrop.find('.cmh-modal-body').children().first();
+        if ($content.length) $content.appendTo($modalHost).hide();
+        $backdrop.remove();
+        $('body').removeClass('cmh-modal-open');
+        $modalHost = null;
+    }
+
+    function openModal($source, title, subtitle) {
+        closeModal();
+        $modalHost = $source.parent();
+
+        var $backdrop = $(
+            '<div class="cmh-modal-backdrop"><div class="cmh-modal" role="dialog" aria-modal="true">' +
+            '<div class="cmh-modal-head"><div>' +
+            '<h2></h2><p></p>' +
+            '</div><button type="button" class="cmh-modal-close" aria-label="Cerrar">&times;</button></div>' +
+            '<div class="cmh-modal-body"></div></div></div>'
+        );
+        $backdrop.find('h2').text(title || '');
+        $backdrop.find('.cmh-modal-head p').text(subtitle || '');
+        if (!subtitle) $backdrop.find('.cmh-modal-head p').remove();
+
+        $backdrop.find('.cmh-modal-body').append($source.show());
+        $('body').addClass('cmh-modal-open').append($backdrop);
+
+        // El primer campo enfocado: se puede empezar a escribir de una.
+        $backdrop.find('input:visible, select:visible, textarea:visible').first().trigger('focus');
+    }
+
+    $(document).on('click', '.cmh-open-modal', function (e) {
+        e.preventDefault();
+        var $btn    = $(this);
+        var $source = $('#' + $btn.data('target'));
+        if (!$source.length) return;
+        openModal($source, $btn.data('title') || $btn.text(), $btn.data('subtitle') || '');
+    });
+
+    $(document).on('click', '.cmh-modal-close', function () { closeModal(); });
+    $(document).on('click', '.cmh-modal-backdrop', function (e) {
+        if (e.target === this) closeModal();
+    });
+    $(document).on('keydown', function (e) {
+        if (e.key === 'Escape') closeModal();
+    });
+
+    // ─── Menú «Más acciones» ──────────────────────────────────────────────
+    $(document).on('click', '.cmh-menu-toggle', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var $list = $(this).siblings('.cmh-menu-list');
+        $('.cmh-menu-list').not($list).hide();
+        $list.toggle();
+    });
+    $(document).on('click', function () { $('.cmh-menu-list').hide(); });
+    $(document).on('click', '.cmh-menu-list', function (e) { e.stopPropagation(); });
+
+    // ─── Buscador y ordenamiento de tablas ───────────────────────────────
+    // Trabaja sobre las filas ya cargadas: no consulta al servidor, así que
+    // responde al instante y no cambia de página al escribir.
+    $(document).on('input', '.cmh-table-search', function () {
+        var term  = $.trim($(this).val()).toLowerCase();
+        var $tbl  = $('#' + $(this).data('table'));
+        var shown = 0;
+
+        $tbl.find('tbody tr').each(function () {
+            var $tr = $(this);
+            // Una subfila de detalle sigue la suerte de la fila de arriba.
+            if ($tr.hasClass('cmh-subrow')) {
+                $tr.toggle($tr.prev('tr').is(':visible'));
+                return;
+            }
+            var match = term === '' || $tr.text().toLowerCase().indexOf(term) !== -1;
+            $tr.toggle(match);
+            if (match) shown++;
+        });
+
+        $(this).closest('.cmh-tablebar').find('.cmh-count')
+            .text(term === '' ? '' : shown + ' de ' + $tbl.find('tbody tr:not(.cmh-subrow)').length);
+    });
+
+    $(document).on('click', '.cmh-sortable th[data-sort]', function () {
+        var $th    = $(this);
+        var $table = $th.closest('table');
+        var idx    = $th.index();
+        var numeric = $th.data('sort') === 'num';
+        var asc    = !$th.hasClass('cmh-asc');
+
+        var $rows = $table.find('tbody tr:not(.cmh-subrow)').get();
+        $rows.sort(function (a, b) {
+            var av = $(a).children().eq(idx).text().trim();
+            var bv = $(b).children().eq(idx).text().trim();
+            if (numeric) {
+                // Se limpian separadores de miles, moneda y unidades.
+                var an = parseFloat(av.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
+                var bn = parseFloat(bv.replace(/[^0-9,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
+                return asc ? an - bn : bn - an;
+            }
+            return asc ? av.localeCompare(bv, 'es') : bv.localeCompare(av, 'es');
+        });
+
+        var $tbody = $table.find('tbody');
+        $.each($rows, function (i, tr) {
+            var $tr  = $(tr);
+            var $sub = $tr.next('.cmh-subrow');
+            $tbody.append($tr);
+            if ($sub.length) $tbody.append($sub);
+        });
+
+        $table.find('th').removeClass('cmh-asc cmh-desc');
+        $th.addClass(asc ? 'cmh-asc' : 'cmh-desc');
+    });
+
+    // ─── Formularios: no perder lo escrito, no enviar dos veces ──────────
+    $(document).on('change input', 'form.cmh-guard :input', function () {
+        $(this).closest('form').addClass('cmh-dirty');
+    });
+    $(document).on('submit', 'form.cmh-guard', function () {
+        $(this).removeClass('cmh-dirty');
+    });
+    window.addEventListener('beforeunload', function (e) {
+        if (!$('form.cmh-dirty').length) return;
+        e.preventDefault();
+        e.returnValue = '';
+    });
+
+    // Un doble clic en «Guardar» registraba la intervención dos veces.
+    $(document).on('submit', 'form', function () {
+        var $form = $(this);
+        if ($form.data('cmhSubmitting')) return false;
+        $form.data('cmhSubmitting', true);
+
+        var $btn = $form.find('button[type="submit"], button:not([type]), input[type="submit"]').first();
+        if ($btn.length) {
+            var original = $btn.is('input') ? $btn.val() : $btn.html();
+            $btn.prop('disabled', true);
+            if ($btn.is('input')) $btn.val('Guardando…'); else $btn.html('Guardando…');
+
+            // Si el navegador vuelve atrás con la página cacheada, el botón
+            // debe quedar utilizable otra vez.
+            setTimeout(function () {
+                $btn.prop('disabled', false);
+                if ($btn.is('input')) $btn.val(original); else $btn.html(original);
+                $form.data('cmhSubmitting', false);
+            }, 8000);
+        }
+    });
+
+    // ─── Recordar la pestaña y los filtros ───────────────────────────────
+    // Solo comodidad local del navegador: nada de esto viaja al servidor.
+    function storageKey(suffix) {
+        return 'cmh:' + (window.location.search.replace(/[&?]cmh_(msg|warn)=[^&]*/g, '')) + ':' + suffix;
+    }
+    function remember(key, value) {
+        try { window.localStorage.setItem(key, value); } catch (err) { /* modo privado */ }
+    }
+    function recall(key) {
+        try { return window.localStorage.getItem(key); } catch (err) { return null; }
+    }
+    function forget(key) {
+        try { window.localStorage.removeItem(key); } catch (err) { /* modo privado */ }
+    }
+
+    $(document).on('click', '.cmh-tab', function () {
+        remember(storageKey('tab'), $(this).data('tab'));
+    });
+
+    // Los filtros del servidor viajan en la URL, así que recordarlos es
+    // recordar su parte de la dirección. Se separan los parámetros que dicen
+    // QUÉ PANTALLA es (y por tanto forman la llave) de los que la filtran.
+    var FILTER_FORMS  = 'form.cmh-filterbar, form.cmh-filter-form, form.cmh-report-filters';
+    var SCREEN_PARAMS = ['page', 'id', 'machine_id', 'company_id', 'city_id', 'branch_id', 'tech_id'];
+    var IGNORED       = ['cmh_msg', 'cmh_warn', 'cmh_restored', 'paged', '_wpnonce', '_wp_http_referer', 'action', 'noheader'];
+
+    function queryPairs() {
+        var out = [], raw = window.location.search.replace(/^\?/, '');
+        if (!raw) return out;
+        raw.split('&').forEach(function (chunk) {
+            if (!chunk) return;
+            var i = chunk.indexOf('=');
+            out.push(i < 0 ? [chunk, ''] : [chunk.slice(0, i), chunk.slice(i + 1)]);
+        });
+        return out;
+    }
+    function joinPairs(pairs) {
+        return pairs.map(function (p) { return p[0] + '=' + p[1]; }).join('&');
+    }
+    function screenPairs() {
+        return queryPairs().filter(function (p) { return SCREEN_PARAMS.indexOf(p[0]) >= 0; });
+    }
+    function filterKey()  { return 'cmh:filters:' + joinPairs(screenPairs()); }
+    function filterQuery() {
+        return joinPairs(queryPairs().filter(function (p) {
+            return SCREEN_PARAMS.indexOf(p[0]) < 0 && IGNORED.indexOf(p[0]) < 0 && p[1] !== '';
+        }));
+    }
+    function screenUrl(extra) {
+        var parts = screenPairs().map(function (p) { return p[0] + '=' + p[1]; });
+        if (extra) parts.push(extra);
+        return window.location.pathname + '?' + parts.join('&');
+    }
+    function hasParam(name) {
+        return queryPairs().some(function (p) { return p[0] === name; });
+    }
+
+    // Enviar el formulario en blanco significa «quiero verlo todo»: eso borra
+    // lo recordado, o al recargar volveríamos a colar el filtro anterior.
+    $(document).on('submit', FILTER_FORMS, function () {
+        var vacio = true;
+        $.each($(this).serializeArray(), function (i, f) {
+            if (SCREEN_PARAMS.indexOf(f.name) >= 0 || IGNORED.indexOf(f.name) >= 0) return;
+            if ($.trim(String(f.value)) !== '') vacio = false;
+        });
+        if (vacio) forget(filterKey());
+    });
+
+    $(document).on('click', '.cmh-clear-filters', function (e) {
+        e.preventDefault();
+        forget(filterKey());
+        window.location.href = screenUrl('');
+    });
+
+    $(function () {
+        // Pestaña recordada, solo si la URL no pide otra cosa.
+        if (!window.location.hash) {
+            var saved = recall(storageKey('tab'));
+            if (saved) {
+                var $tab = $('.cmh-tab[data-tab="' + saved + '"]');
+                if ($tab.length) $tab.trigger('click');
+            }
+        }
+
+        // Filtros recordados, solo en pantallas que de verdad filtran.
+        if ($(FILTER_FORMS).length) {
+            var actual = filterQuery(), guardado = recall(filterKey());
+
+            if (actual) {
+                remember(filterKey(), actual);
+            } else if (guardado && !hasParam('cmh_restored')) {
+                // replace() y no href: volver atrás no debe caer aquí otra vez.
+                window.location.replace(screenUrl(guardado + '&cmh_restored=1'));
+                return;
+            }
+
+            if (hasParam('cmh_restored')) {
+                $(FILTER_FORMS).first().closest('.cmh-panel').before(
+                    '<div class="cmh-restored-note">' +
+                    '<span class="dashicons dashicons-filter"></span>' +
+                    '<span>Se repusieron los filtros que tenías la última vez en esta pantalla.</span>' +
+                    '<a href="#" class="cmh-clear-filters">Ver todo</a></div>'
+                );
+            }
+        }
+
+        // Las pestañas se quedan a la vista al bajar.
+        $('.cmh-tabs-wrapper').addClass('cmh-sticky');
+    });
+
 })(jQuery);

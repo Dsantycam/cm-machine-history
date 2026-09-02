@@ -547,7 +547,7 @@ class CMH_Time {
 
         $companies = $wpdb->get_results( "SELECT id, name FROM {$t['companies']} ORDER BY name ASC" );
 
-        echo '<div class="cmh-panel"><form method="get" style="margin:0"><div class="cmh-form-grid">'
+        echo '<div class="cmh-panel"><form method="get" class="cmh-filter-form" style="margin:0"><div class="cmh-form-grid">'
             . '<input type="hidden" name="page" value="' . esc_attr( CMH_SLUG . '-time' ) . '">'
             . '<label>Desde<input type="date" name="from" value="' . esc_attr( $f['from'] ) . '"></label>'
             . '<label>Hasta<input type="date" name="to" value="' . esc_attr( $f['to'] ) . '"></label>'

@@ -14,6 +14,7 @@ class CMH_Admin {
     public static function init() {
         add_action( 'admin_menu',            [ __CLASS__, 'admin_menu' ] );
         add_action( 'admin_enqueue_scripts', [ __CLASS__, 'assets' ] );
+        add_action( 'admin_head',            [ __CLASS__, 'menu_styles' ] );
 
         foreach ( [ 'company', 'city', 'branch', 'machine', 'intervention' ] as $type ) {
             add_action( 'admin_post_cm_save_' . $type, [ __CLASS__, 'save_' . $type ] );
@@ -43,15 +44,44 @@ class CMH_Admin {
     public static function admin_menu() {
         $slug = CMH_SLUG;
         add_menu_page( 'Historial de Máquinas', 'Máquinas', 'edit_others_posts', $slug, [ __CLASS__, 'page_dashboard' ], 'dashicons-hammer', 26 );
+
+        // v2.4 — Mismas páginas, ordenadas por lo que uno viene a hacer. Los
+        // separadores son entradas inertes: no llevan a ninguna parte y el CSS
+        // las pinta como rótulo. Nada cambió de nombre ni desapareció.
         add_submenu_page( $slug, 'Dashboard',       'Dashboard',       'edit_others_posts', $slug,                  [ __CLASS__, 'page_dashboard' ] );
-        add_submenu_page( $slug, 'Empresas',        'Empresas',        'edit_others_posts', $slug . '-companies',   [ __CLASS__, 'page_companies' ] );
         add_submenu_page( $slug, 'Buscar máquinas', 'Buscar máquinas', 'edit_others_posts', $slug . '-machines',    [ __CLASS__, 'page_machines' ] );
-        add_submenu_page( $slug, 'Intervenciones',   'Intervenciones',  'edit_others_posts', $slug . '-interventions', [ __CLASS__, 'page_interventions' ] );
+        add_submenu_page( $slug, 'Empresas',        'Empresas',        'edit_others_posts', $slug . '-companies',   [ __CLASS__, 'page_companies' ] );
+
+        self::menu_separator( $slug, 'Seguimiento', 1 );
+        add_submenu_page( $slug, 'Intervenciones',  'Intervenciones',  'edit_others_posts', $slug . '-interventions', [ __CLASS__, 'page_interventions' ] );
+        add_submenu_page( $slug, 'Equipo técnico',  'Equipo técnico',  'edit_others_posts', $slug . '-time',        [ 'CMH_Time', 'page_time' ] );
         add_submenu_page( $slug, 'Reportes',        'Reportes',        'edit_others_posts', $slug . '-reports',     [ 'CMH_Reports', 'page_reports' ] );
-        add_submenu_page( $slug, 'Equipo técnico', 'Equipo técnico',  'edit_others_posts', $slug . '-time',        [ 'CMH_Time', 'page_time' ] );
+
+        self::menu_separator( $slug, 'Configuración', 2 );
         add_submenu_page( $slug, 'Formatos',        'Formatos',        'edit_others_posts', $slug . '-forms',       [ 'CMH_Forms', 'page_forms' ] );
         add_submenu_page( $slug, 'Integración',     'Integración',     'edit_others_posts', $slug . '-integration', [ __CLASS__, 'page_integration' ] );
         add_submenu_page( $slug, 'Ajustes',         'Ajustes',         'edit_others_posts', $slug . '-settings',    [ 'CMH_Schedule', 'page_settings' ] );
+    }
+
+    /** Rótulo inerte que separa grupos dentro del submenú. */
+
+    /**
+     * Los rótulos del submenú se ven en TODAS las pantallas del panel, también
+     * donde no se carga el CSS del plugin. Por eso van aquí, en línea y mínimos.
+     */
+    public static function menu_styles() {
+        echo '<style id="cmh-nav-sep-style">'
+            . '#adminmenu .cmh-nav-sep{display:block;padding:6px 0 2px;font-size:10px;font-weight:700;'
+            . 'letter-spacing:.08em;text-transform:uppercase;color:#8c8f94;cursor:default}'
+            . '#adminmenu li a:has(.cmh-nav-sep),#adminmenu a[href*="-sep-"]{pointer-events:none;background:transparent!important}'
+            . '#adminmenu li a .cmh-nav-sep{border-top:1px solid rgba(255,255,255,.12);margin-top:4px;padding-top:8px}'
+            . '</style>';
+    }
+    private static function menu_separator( $slug, $label, $n ) {
+        add_submenu_page(
+            $slug, '', '<span class="cmh-nav-sep">' . esc_html( $label ) . '</span>',
+            'edit_others_posts', $slug . '-sep-' . intval( $n ), '__return_false'
+        );
     }
 
     public static function assets( $hook ) {
@@ -137,9 +167,14 @@ class CMH_Admin {
 
     public static function page_footer() { echo '</div>'; }
 
+    /**
+     * v2.4 — Los formularios llevan `cmh-guard`: si se escribió algo y se sale
+     * de la página sin guardar, el navegador avisa. Los formularios de filtro no
+     * pasan por aquí, así que no molestan con el aviso.
+     */
     public static function form_start( $action, $multipart = false ) {
         $enc = $multipart ? ' enctype="multipart/form-data"' : '';
-        echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '"' . $enc . '>';
+        echo '<form method="post" class="cmh-guard" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '"' . $enc . '>';
         echo '<input type="hidden" name="action" value="' . esc_attr( $action ) . '">';
         wp_nonce_field( 'cmh_action' );
     }
@@ -245,12 +280,17 @@ class CMH_Admin {
     /**
      * Tarjeta de indicador. Con `$url` se vuelve un enlace a la lista que la
      * explica (v2.3): un número suelto obliga a salir a buscar de dónde sale.
+     *
+     * v2.4 — Un valor largo (un costo de siete cifras, por ejemplo) reduce su
+     * tamaño en vez de desbordar la tarjeta o quedar cortado.
      */
     public static function metric_card( $label, $value, $hint = '', $accent = '', $url = '' ) {
-        $acc  = $accent ? '<div class="cmh-card-accent cmh-card-accent-' . esc_attr( $accent ) . '"></div>' : '';
-        $body = $acc
+        $value = (string) $value;
+        $long  = mb_strlen( $value ) > 9 ? ' cmh-long' : '';
+        $acc   = $accent ? '<div class="cmh-card-accent cmh-card-accent-' . esc_attr( $accent ) . '"></div>' : '';
+        $body  = $acc
             . '<span>' . esc_html( $label ) . '</span>'
-            . '<strong>' . esc_html( (string) $value ) . '</strong>'
+            . '<strong class="' . trim( $long ) . '">' . esc_html( $value ) . '</strong>'
             . ( $hint !== '' ? '<small>' . esc_html( $hint ) . '</small>' : '' );
 
         if ( $url ) {
@@ -259,6 +299,22 @@ class CMH_Admin {
             return;
         }
         echo '<div class="cmh-card">' . $body . '</div>';
+    }
+
+    /**
+     * Indicador secundario de la franja compacta (v2.4). Mismo dato, menos peso
+     * visual: lo que se consulta de vez en cuando no tiene por qué competir con
+     * lo que se mira todos los días.
+     */
+    public static function stat_item( $label, $value, $url = '' ) {
+        $value = (string) $value;
+        $long  = mb_strlen( $value ) > 8 ? ' cmh-long' : '';
+        $body  = '<span class="cmh-stat-label">' . esc_html( $label ) . '</span>'
+            . '<span class="cmh-stat-value' . $long . '">' . esc_html( $value ) . '</span>';
+
+        echo $url
+            ? '<a class="cmh-stat" href="' . esc_url( $url ) . '">' . $body . '</a>'
+            : '<div class="cmh-stat">' . $body . '</div>';
     }
 
     private static function export_nonce_url( $type, $args = [] ) {
@@ -299,33 +355,40 @@ class CMH_Admin {
 
         self::page_header( 'Dashboard' );
 
-        echo '<div class="cmh-hero-block">'
-            . '<div><h2>Resumen operativo</h2><p>Vista general de la flota — ' . esc_html( $month_label ) . '</p></div>'
-            . '<a class="button button-primary" href="' . esc_url( self::admin_url( CMH_SLUG . '-companies' ) ) . '">Gestionar empresas</a>'
-            . '</div>';
+        // ── Cabecera del dashboard (v2.4) ────────────────────────────────
+        echo '<div class="cmh-head"><div class="cmh-head-info">'
+            . '<div class="cmh-head-title"><h2>Resumen operativo</h2></div>'
+            . '<p class="cmh-head-meta"><span>Vista general de la flota</span>'
+            . '<span>Mes en curso: <strong>' . esc_html( $month_label ) . '</strong></span>'
+            . '<span><strong>' . intval( $machines ) . '</strong> máquinas registradas</span></p>'
+            . '</div><div class="cmh-head-actions">'
+            . '<a class="button button-primary" href="' . esc_url( self::admin_url( CMH_SLUG . '-machines' ) ) . '">Buscar máquinas</a>'
+            . '<div class="cmh-menu"><button type="button" class="button cmh-menu-toggle">Más acciones ▾</button>'
+            . '<div class="cmh-menu-list" style="display:none">'
+            . '<a href="' . esc_url( self::admin_url( CMH_SLUG . '-companies' ) ) . '">Gestionar empresas y sucursales</a>'
+            . '<a href="' . esc_url( self::interv_url() ) . '">Ver todas las intervenciones</a>'
+            . '<a href="' . esc_url( self::admin_url( CMH_SLUG . '-time' ) ) . '">Equipo técnico</a>'
+            . '<a href="' . esc_url( self::admin_url( CMH_SLUG . '-reports' ) ) . '">Reportes</a>'
+            . '</div></div></div></div>';
 
-        echo '<div class="cmh-grid">';
-        // v2.3 — Cada tarjeta lleva a la lista que la explica.
-        self::metric_card( 'Máquinas',              $machines,                                            'registradas',      'blue',
-            self::admin_url( CMH_SLUG . '-machines' ) );
-        self::metric_card( 'Intervenciones',        $interventions,                                       'historial total',  'blue',
-            self::interv_url() );
-        self::metric_card( 'Preventivos',           $preventivos,                                         'historial total',  'ok',
-            self::interv_url( [ 'type' => 'preventivo' ] ) );
-        self::metric_card( 'Correctivos / Averías', $correctivos,                                         'historial total',  'warn',
-            self::interv_url( [ 'affects' => 1 ] ) );
-        self::metric_card( 'Disponibilidad ' . $month_label, CMH_Metrics::fmt_pct( $fleet_avail ),        'flota ' . $month_label, $avail_accent,
-            self::admin_url( CMH_SLUG . '-reports' ) );
-        self::metric_card( 'MTTR ' . $month_label,  CMH_Metrics::fmt_mttr( $fleet_mttr ),                 'solo averías',     'warn',
-            self::interv_url( [ 'affects' => 1 ] ) );
-        self::metric_card( 'MTBF flota',            CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( 0, 12 ) ),  'últimos 12 meses', 'blue',
-            self::admin_url( CMH_SLUG . '-reports' ) );
-        self::metric_card( 'Horas parada ' . $month_label, number_format( $month_dt, 2, ',', '.' ) . ' h', 'por averías',     'danger',
-            self::interv_url( [ 'affects' => 1 ] ) );
-        self::metric_card( 'Costo total',           '$' . number_format( $cost_total, 0, ',', '.' ),      'historial',        'blue',
-            self::interv_url() );
-        self::metric_card( 'Por cobrar',            '$' . number_format( $por_cobrar_total, 0, ',', '.' ), 'saldo pendiente', $por_cobrar_total > 0 ? 'warn' : 'ok',
-            self::interv_url( [ 'pay' => 'pending' ] ) );
+        // ── Indicadores en dos niveles (v2.4) ────────────────────────────
+        echo '<div class="cmh-grid-primary">';
+        self::metric_card( 'Disponibilidad ' . $month_label, CMH_Metrics::fmt_pct( $fleet_avail ),
+            'flota, mes en curso', $avail_accent, self::admin_url( CMH_SLUG . '-reports' ) );
+        self::metric_card( 'Intervenciones', $interventions, 'historial total', 'blue', self::interv_url() );
+        self::metric_card( 'Por cobrar', '$' . number_format( $por_cobrar_total, 0, ',', '.' ),
+            'saldo pendiente', $por_cobrar_total > 0 ? 'warn' : 'ok', self::interv_url( [ 'pay' => 'pending' ] ) );
+        self::metric_card( 'Costo total', '$' . number_format( $cost_total, 0, ',', '.' ),
+            'historial', 'blue', self::interv_url() );
+        echo '</div>';
+
+        echo '<div class="cmh-stats-strip">';
+        self::stat_item( 'Máquinas',       $machines,    self::admin_url( CMH_SLUG . '-machines' ) );
+        self::stat_item( 'Preventivos',    $preventivos, self::interv_url( [ 'type' => 'preventivo' ] ) );
+        self::stat_item( 'Correctivos/Averías', $correctivos, self::interv_url( [ 'affects' => 1 ] ) );
+        self::stat_item( 'MTTR ' . $month_label, CMH_Metrics::fmt_mttr( $fleet_mttr ), self::interv_url( [ 'affects' => 1 ] ) );
+        self::stat_item( 'MTBF flota',     CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( 0, 12 ) ) );
+        self::stat_item( 'Horas parada ' . $month_label, number_format( $month_dt, 1, ',', '.' ) . ' h', self::interv_url( [ 'affects' => 1 ] ) );
         echo '</div>';
 
         // v2.0 — Tendencia gráfica de la flota (disponibilidad, mezcla y costos).
@@ -424,10 +487,20 @@ class CMH_Admin {
         global $wpdb; $t = CMH_Core::tables();
         self::page_header( 'Empresas', [ [ 'label' => 'Empresas' ] ] );
 
-        echo '<div class="cmh-layout"><div class="cmh-main"><div class="cmh-panel">'
+        echo '<div class="cmh-panel">'
             . '<div class="cmh-toolbar"><h2>Empresas registradas</h2>'
-            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines' ) ) . '">Exportar todas las máquinas (CSV)</a></div>'
-            . '<table class="widefat cmh"><thead><tr><th>Empresa</th><th>Código</th><th>Ciudades</th><th>Máquinas</th><th></th></tr></thead><tbody>';
+            . '<div class="cmh-toolbar-actions">'
+            . '<button type="button" class="button button-primary cmh-open-modal" data-target="cmh-box-empresa" '
+            . 'data-title="Agregar una empresa nueva" data-subtitle="Es el nivel más alto: dentro de una empresa van sus sucursales y, dentro de estas, las máquinas.">'
+            . 'Agregar empresa</button>'
+            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines' ) ) . '">Exportar máquinas (CSV)</a>'
+            . '</div></div>'
+            . '<div class="cmh-tablebar">'
+            . '<input type="search" class="cmh-table-search" data-table="cmh-tbl-empresas" placeholder="Buscar empresa por nombre o código…">'
+            . '<span class="cmh-count"></span></div>'
+            . '<div class="cmh-table-scroll"><table id="cmh-tbl-empresas" class="widefat cmh cmh-sortable"><thead><tr>'
+            . '<th data-sort="text">Empresa</th><th data-sort="text">Código</th>'
+            . '<th data-sort="num">Ciudades</th><th data-sort="num">Máquinas</th><th></th></tr></thead><tbody>';
 
         $rows = $wpdb->get_results(
             "SELECT c.*, (SELECT COUNT(*) FROM {$t['cities']} ci WHERE ci.company_id=c.id) cities, (SELECT COUNT(*) FROM {$t['machines']} m WHERE m.company_id=c.id) machines FROM {$t['companies']} c ORDER BY c.name"
@@ -448,19 +521,23 @@ class CMH_Admin {
         }
         if ( ! $rows ) {
             echo '<tr><td colspan="5">';
-            self::empty_state( 'dashicons-building', 'Sin empresas', 'Crea la primera empresa para comenzar.' );
+            self::empty_state( 'dashicons-building', 'Sin empresas', 'Las máquinas se registran dentro de una empresa, así que se empieza por aquí.',
+                [ 'label' => 'Crear la primera empresa', 'modal' => 'cmh-box-empresa', 'title' => 'Nueva empresa' ] );
             echo '</td></tr>';
         }
         echo '</tbody></table></div></div>';
 
-        echo '<div class="cmh-side"><div class="cmh-panel"><h2>Nueva empresa</h2>';
+        // Formulario de alta en ventana (v2.4): deja de estrechar la tabla.
+        echo '<div id="cmh-box-empresa" style="display:none">';
         self::form_start( 'cm_save_company' );
         echo '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies' ) ) . '">'
-            . '<label>Nombre <em>*</em></label><input name="name" required class="cmh-uppercase">'
-            . '<label>Código corto <em>*</em></label><input name="code" placeholder="APC" maxlength="10" required class="cmh-uppercase">'
-            . '<p style="font-size:12px;color:#646970;margin:6px 0">Se usará en el código: <strong>APC BOG TY No. 001</strong></p>'
-            . '<button class="button button-primary">Guardar empresa</button></form>';
-        echo '</div></div></div>';
+            . '<div class="cmh-form-grid">'
+            . '<label>Nombre de la empresa <em>*</em><input name="name" required class="cmh-uppercase"></label>'
+            . '<label>Código corto <em>*</em><input name="code" placeholder="APC" maxlength="10" required class="cmh-uppercase"></label>'
+            . '</div>'
+            . '<p class="cmh-hint" style="margin-top:12px">El código corto se usa para armar el de cada máquina: <strong>APC BOG TY No. 001</strong></p>'
+            . '<div class="cmh-form-actions"><button class="button button-primary">Guardar empresa</button></div>'
+            . '</form></div>';
         self::page_footer();
     }
 
@@ -495,8 +572,14 @@ class CMH_Admin {
             . '</form>'
             . '</div></div>';
 
-        echo '<div class="cmh-layout"><div class="cmh-main"><div class="cmh-panel"><h2>Ciudades / Sucursales</h2>'
-            . '<table class="widefat cmh"><thead><tr><th>Ciudad/Sucursal</th><th>Código</th><th>Máquinas</th><th></th></tr></thead><tbody>';
+        echo '<div class="cmh-panel">'
+            . '<div class="cmh-toolbar"><h2>Ciudades / Sucursales</h2>'
+            . '<button type="button" class="button button-primary cmh-open-modal" data-target="cmh-box-sucursal" '
+            . 'data-title="Agregar una sucursal a ' . esc_attr( $c->name ) . '" '
+            . 'data-subtitle="Es la sede o ciudad donde están las máquinas. Sus datos de contacto se heredan de la empresa si los dejas vacíos.">'
+            . 'Agregar sucursal</button></div>'
+            . '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr>'
+            . '<th>Ciudad/Sucursal</th><th>Código</th><th>Máquinas</th><th></th></tr></thead><tbody>';
 
         $rows = $wpdb->get_results( $wpdb->prepare(
             "SELECT ci.*, (SELECT COUNT(*) FROM {$t['machines']} m WHERE m.city_id=ci.id) machines FROM {$t['cities']} ci WHERE ci.company_id=%d ORDER BY ci.name",
@@ -511,31 +594,39 @@ class CMH_Admin {
         if ( ! $rows ) echo '<tr><td colspan="4">' . self::empty_state_inline( 'Sin ciudades/sucursales aún.' ) . '</td></tr>';
         echo '</tbody></table></div></div>';
 
-        echo '<div class="cmh-side"><div class="cmh-panel"><h2>Nueva ciudad/sucursal</h2>';
-        self::form_start( 'cm_save_city' );
-        echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
-            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ) ) . '">'
-            . '<label>Nombre <em>*</em></label><input name="name" placeholder="BOGOTÁ" required class="cmh-uppercase">'
-            . '<label>Código <em>*</em></label><input name="code" placeholder="BOG" maxlength="10" required class="cmh-uppercase">'
-            . '<button class="button button-primary">Guardar</button></form>';
-        echo '</div>';
-
         // v0.10 — Clientes con acceso a esta empresa (portal de solo lectura).
         echo '<div class="cmh-panel"><h2>Clientes con acceso</h2>';
         CMH_Client::company_clients_panel( $company_id );
         echo '</div>';
 
-        echo '<div class="cmh-panel"><h2>Editar empresa</h2>';
+        // v2.4 — La ficha de la empresa pasa a ancho completo: con los datos de
+        // contacto y facturación no cabía en la columna de 340px sin verse mal.
+        echo '<div class="cmh-panel"><h2>Datos de la empresa</h2>';
         self::form_start( 'cm_update_company' );
         echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ) ) . '">'
-            . '<label>Nombre <em>*</em></label><input name="name" value="' . esc_attr( $c->name ) . '" required class="cmh-uppercase">'
-            . '<label>Código <em>*</em></label><input name="code" value="' . esc_attr( $c->code ) . '" maxlength="10" required class="cmh-uppercase">'
-            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>';
-        // v2.2 — Contacto, ubicación y facturación de la empresa.
+            . '<div class="cmh-form-grid">'
+            . '<label>Nombre <em>*</em><input name="name" value="' . esc_attr( $c->name ) . '" required class="cmh-uppercase"></label>'
+            . '<label>Código <em>*</em><input name="code" value="' . esc_attr( $c->code ) . '" maxlength="10" required class="cmh-uppercase"></label>'
+            . '</div>'
+            . '<p class="cmh-hint" style="margin-top:8px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>';
         self::contact_fields_form( $c, true );
-        echo '<button class="button button-primary">Guardar cambios</button></form>';
-        echo '</div></div></div>';
+        echo '<div class="cmh-form-actions"><button class="button button-primary">Guardar cambios</button></div></form>';
+        echo '</div>';
+
+        // Alta de sucursal en ventana (v2.4).
+        echo '<div id="cmh-box-sucursal" style="display:none">';
+        self::form_start( 'cm_save_city' );
+        echo '<input type="hidden" name="company_id" value="' . intval( $company_id ) . '">'
+            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $company_id ] ) ) . '">'
+            . '<div class="cmh-form-grid">'
+            . '<label>Nombre de la sucursal <em>*</em><input name="name" placeholder="BOGOTÁ" required class="cmh-uppercase"></label>'
+            . '<label>Código corto <em>*</em><input name="code" placeholder="BOG" maxlength="10" required class="cmh-uppercase"></label>'
+            . '</div>'
+            . '<p class="cmh-hint" style="margin-top:12px">Podrás completar sus datos de contacto al entrar en la sucursal.</p>'
+            . '<div class="cmh-form-actions"><button class="button button-primary">Guardar sucursal</button></div>'
+            . '</form></div>';
+
         self::page_footer();
     }
 
@@ -554,21 +645,29 @@ class CMH_Admin {
         ] );
 
         $city_machine_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$t['machines']} WHERE city_id=%d", $city_id ) );
-        echo '<div class="cmh-layout"><div class="cmh-main">';
-        echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Máquinas en ' . esc_html( $city->name ) . '</h2><div style="display:flex;gap:8px;align-items:center">'
-            . '<a class="button button-primary" href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'city_id' => $city_id ] ) ) . '">Ver reporte de la sucursal</a>'
-            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'city_id' => $city_id ] ) ) . '">Exportar CSV</a>'
-            . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Eliminar ciudad/sucursal \'+' . json_encode( $city->name ) . '+\' con ' . $city_machine_count . ' máquinas? Esta acción es irreversible.\')">'
-            . '<input type="hidden" name="action" value="cm_delete_city">'
-            . '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
-            . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
-            . '<button type="submit" class="button" style="color:#d63638;border-color:#d63638">Eliminar ciudad</button>'
-            . '</form></div></div>';
-        self::machines_table( $city_id, 0 );
-        echo '</div></div>';
 
-        echo '<div class="cmh-side"><div class="cmh-panel"><h2>Agregar máquina</h2>';
-        self::machine_form( $city->company_id, $city_id );
+        // ── Cabecera (v2.4) ──────────────────────────────────────────────
+        echo '<div class="cmh-head"><div class="cmh-head-info">'
+            . '<div class="cmh-head-title"><h2>' . esc_html( $city->name ) . '</h2>'
+            . '<span class="cmh-badge" style="background:#e7f0fb;color:#1c4d80">' . esc_html( $city->code ) . '</span></div>'
+            . '<p class="cmh-head-meta"><span>Sucursal de <strong>' . esc_html( $city->company_name ) . '</strong></span>'
+            . '<span><strong>' . intval( $city_machine_count ) . '</strong> máquinas</span></p>'
+            . '</div><div class="cmh-head-actions">'
+            . '<button type="button" class="button button-primary cmh-open-modal" data-target="cmh-box-maquina" '
+            . 'data-title="Agregar una máquina a ' . esc_attr( $city->name ) . '" '
+            . 'data-subtitle="El código se arma solo con la empresa, la sucursal y la marca.">Agregar máquina</button>'
+            . '<div class="cmh-menu"><button type="button" class="button cmh-menu-toggle">Más acciones ▾</button>'
+            . '<div class="cmh-menu-list" style="display:none">'
+            . '<a href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'city_id' => $city_id ] ) ) . '">Ver reporte de la sucursal</a>'
+            . '<a href="' . esc_url( self::export_nonce_url( 'machines', [ 'city_id' => $city_id ] ) ) . '">Exportar máquinas (CSV)</a>'
+            . '<a href="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $city->company_id ] ) ) . '">Volver a la empresa</a>'
+            . '<div class="cmh-menu-sep"></div>'
+            . '<button type="button" class="cmh-open-modal" data-target="cmh-box-borrar-ciudad" '
+            . 'data-title="Eliminar la sucursal ' . esc_attr( $city->name ) . '" style="color:#d63638">Eliminar sucursal</button>'
+            . '</div></div></div></div>';
+
+        echo '<div class="cmh-panel"><h2>Máquinas en ' . esc_html( $city->name ) . '</h2>';
+        self::machines_table( $city_id, 0 );
         echo '</div>';
 
         // v2.0 — Acceso de clientes acotado a ESTA ciudad/sucursal.
@@ -576,18 +675,38 @@ class CMH_Admin {
         CMH_Client::city_clients_panel( $city_id );
         echo '</div>';
 
-        echo '<div class="cmh-panel"><h2>Editar ciudad/sucursal</h2>';
+        // v2.4 — A ancho completo: con los datos de contacto no cabía bien en la
+        // columna estrecha de la derecha.
+        echo '<div class="cmh-panel"><h2>Datos de la sucursal</h2>';
         self::form_start( 'cm_update_city' );
         echo '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] ) ) . '">'
-            . '<label>Nombre <em>*</em></label><input name="name" value="' . esc_attr( $city->name ) . '" required class="cmh-uppercase">'
-            . '<label>Código <em>*</em></label><input name="code" value="' . esc_attr( $city->code ) . '" maxlength="10" required class="cmh-uppercase">'
-            . '<p style="font-size:12px;color:#646970;margin:4px 0 12px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>';
-        // v2.2 — Contacto y ubicación de la sucursal, heredando de su empresa.
+            . '<div class="cmh-form-grid">'
+            . '<label>Nombre <em>*</em><input name="name" value="' . esc_attr( $city->name ) . '" required class="cmh-uppercase"></label>'
+            . '<label>Código <em>*</em><input name="code" value="' . esc_attr( $city->code ) . '" maxlength="10" required class="cmh-uppercase"></label>'
+            . '</div>'
+            . '<p class="cmh-hint" style="margin-top:8px">Cambiar el código <strong>no</strong> actualiza los códigos de máquinas existentes.</p>';
         $parent_company = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['companies']} WHERE id=%d", (int) $city->company_id ) );
         self::contact_fields_form( $city, false, $parent_company );
-        echo '<button class="button button-primary">Guardar cambios</button></form>';
-        echo '</div></div></div>';
+        echo '<div class="cmh-form-actions"><button class="button button-primary">Guardar cambios</button></div></form>';
+        echo '</div>';
+
+        // ── Ventanas ─────────────────────────────────────────────────────
+        echo '<div id="cmh-box-maquina" style="display:none">';
+        self::machine_form( $city->company_id, $city_id );
+        echo '</div>';
+
+        echo '<div id="cmh-box-borrar-ciudad" style="display:none">'
+            . '<p>Se eliminará la sucursal <strong>' . esc_html( $city->name ) . '</strong> y sus '
+            . intval( $city_machine_count ) . ' máquina(s), con todo su historial. <strong>No se puede deshacer.</strong></p>'
+            . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Seguro? Esta acción es irreversible.\')">'
+            . '<input type="hidden" name="action" value="cm_delete_city">'
+            . '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
+            . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+            . '<div class="cmh-form-actions">'
+            . '<button type="submit" class="button" style="background:#d63638;border-color:#d63638;color:#fff">Sí, eliminar la sucursal</button>'
+            . '</div></form></div>';
+
         self::page_footer();
     }
 
@@ -606,13 +725,19 @@ class CMH_Admin {
             [ 'label' => $b->name ],
         ] );
 
-        echo '<div class="cmh-layout"><div class="cmh-main"><div class="cmh-panel">'
+        echo '<div class="cmh-panel">'
             . '<div class="cmh-toolbar"><h2>Máquinas en ' . esc_html( $b->name ) . '</h2>'
-            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'branch_id' => $branch_id ] ) ) . '">Exportar CSV</a></div>';
+            . '<div class="cmh-toolbar-actions">'
+            . '<button type="button" class="button button-primary cmh-open-modal" data-target="cmh-box-maquina" '
+            . 'data-title="Agregar una máquina a ' . esc_attr( $b->name ) . '">Agregar máquina</button>'
+            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'branch_id' => $branch_id ] ) ) . '">Exportar CSV</a>'
+            . '</div></div>';
         self::machines_table( 0, $branch_id );
-        echo '</div></div><div class="cmh-side"><div class="cmh-panel"><h2>Agregar máquina</h2>';
+        echo '</div>';
+
+        echo '<div id="cmh-box-maquina" style="display:none">';
         self::machine_form( $b->company_id, $b->city_id, $branch_id );
-        echo '</div></div></div>';
+        echo '</div>';
         self::page_footer();
     }
 
@@ -693,56 +818,79 @@ class CMH_Admin {
             $maint_label = esc_html( $m->next_maintenance_date ) . ' <em style="color:#646970">(en ' . $maint_days . ' días)</em>';
         }
 
-        // Hero
+        // ── Cabecera (v2.4) ──────────────────────────────────────────────
+        // Antes: título, tres badges y CINCO botones peleando la misma línea.
+        // Ahora: identidad y datos de la máquina a la izquierda, UNA acción
+        // principal a la derecha y el resto recogido en un menú.
         $loc = $m->company_name . ' / ' . $m->city_name . ( $m->branch_id ? ' / ' . $m->branch_name : '' );
-        echo '<div class="cmh-hero-block"><div>'
-            . '<div class="cmh-kicker">Hoja de vida técnica</div>'
-            . '<h2>' . esc_html( $m->machine_code ) . ' ' . self::status_badge( $m->status )
-            . ( $is_crit ? ' <span class="cmh-badge cmh-badge-critical">Crítica</span>' : '' )
-            . $maint_badge . '</h2>'
-            . '<p>' . esc_html( $loc ) . ' &nbsp;·&nbsp; ' . esc_html( trim( $m->brand . ' ' . $m->model ) ) . '</p>'
-            . '</div><div class="cmh-hero-actions">'
-            . '<button type="button" class="button button-primary cmh-btn-toggle-edit" data-target="cmh-schedule-box"><span class="dashicons dashicons-calendar-alt" style="vertical-align:middle;margin-top:-2px"></span> Programar mantenimiento</button>'
-            . '<a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'machine_id' => $machine_id ] ) ) . '">Ver reporte de la máquina</a>'
-            . '<a class="button cmh-btn-print" href="#">Imprimir hoja de vida</a>'
-            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'interventions', [ 'machine_id' => $machine_id ] ) ) . '">Exportar intervenciones (CSV)</a>'
-            . '<a class="button" href="' . esc_url( $m->branch_id ? self::admin_url( CMH_SLUG . '-companies', [ 'branch_id' => $m->branch_id ] ) : self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $m->city_id ] ) ) . '">Volver</a>'
+
+        echo '<div class="cmh-head"><div class="cmh-head-info">'
+            . '<div class="cmh-head-title">'
+            . '<h2>' . esc_html( $m->machine_code ) . '</h2>'
+            . self::status_badge( $m->status )
+            . ( $is_crit ? '<span class="cmh-badge cmh-badge-critical">Crítica</span>' : '' )
+            . $maint_badge
+            . '</div>'
+            . '<p class="cmh-head-meta">'
+            . '<span>' . esc_html( trim( $m->brand . ' ' . $m->model ) ?: 'Sin marca/modelo' ) . '</span>'
+            . '<span>' . esc_html( $loc ) . '</span>'
+            . '<span>Horómetro <strong>' . esc_html( number_format( (float) $m->current_hourmeter, 0, ',', '.' ) ) . ' h</strong></span>'
+            . ( $m->next_maintenance_date
+                ? '<span>Próximo mantenimiento <strong>' . esc_html( $m->next_maintenance_date ) . '</strong></span>'
+                : '<span>Sin mantenimiento programado</span>' )
+            . '</p></div>'
+
+            . '<div class="cmh-head-actions">'
+            . '<button type="button" class="button button-primary cmh-open-modal" data-target="cmh-box-intervencion" '
+            . 'data-title="Registrar intervención" data-subtitle="Máquina ' . esc_attr( $m->machine_code ) . '">'
+            . 'Registrar intervención</button>'
+
+            . '<div class="cmh-menu">'
+            . '<button type="button" class="button cmh-menu-toggle">Más acciones ▾</button>'
+            . '<div class="cmh-menu-list" style="display:none">'
+            . '<button type="button" class="cmh-open-modal" data-target="cmh-box-archivo" '
+            . 'data-title="Anexar PDF o archivo" data-subtitle="Máquina ' . esc_attr( $m->machine_code ) . '">Anexar PDF o archivo</button>'
+            . '<button type="button" class="cmh-open-modal" data-target="cmh-box-programar" '
+            . 'data-title="Programar próximo mantenimiento" data-subtitle="Solo fija la fecha. No crea una intervención.">Programar mantenimiento</button>'
+            . '<div class="cmh-menu-sep"></div>'
+            . '<a href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'machine_id' => $machine_id ] ) ) . '">Ver reporte de la máquina</a>'
+            . '<a href="' . esc_url( self::interv_url( [ 'machine_id' => $machine_id ] ) ) . '">Ver todas sus intervenciones</a>'
+            . '<a class="cmh-btn-print" href="#">Imprimir hoja de vida</a>'
+            . '<a href="' . esc_url( self::export_nonce_url( 'interventions', [ 'machine_id' => $machine_id ] ) ) . '">Exportar intervenciones (CSV)</a>'
+            . '<div class="cmh-menu-sep"></div>'
+            . '<a href="' . esc_url( $m->branch_id
+                ? self::admin_url( CMH_SLUG . '-companies', [ 'branch_id' => $m->branch_id ] )
+                : self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $m->city_id ] ) ) . '">Volver a la sucursal</a>'
+            . '</div></div>'
             . '</div></div>';
 
-        // Programar mantenimiento — formulario rápido (sin registrar intervención).
-        echo '<div id="cmh-schedule-box" class="cmh-panel" style="display:none;border-left:4px solid #2271b1">'
-            . '<h2 style="margin-top:0">Programar próximo mantenimiento</h2>'
-            . '<p style="font-size:13px;color:#646970;margin:-6px 0 12px">Solo fija la fecha del próximo mantenimiento de esta máquina. No crea una intervención.</p>';
-        self::form_start( 'cm_schedule_maintenance' );
-        echo '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
-            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ) ) . '">'
-            . '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">'
-            . '<label style="margin:0">Fecha del próximo mantenimiento'
-            . '<input type="date" name="next_maintenance_date" value="' . esc_attr( $m->next_maintenance_date ?: '' ) . '" min="' . esc_attr( current_time( 'Y-m-d' ) ) . '" required></label>'
-            . '<label style="margin:0">Repetir cada'
-            . CMH_Schedule::interval_field( (int) ( $m->maintenance_interval_days ?? 0 ) ) . '</label>'
-            . '<button class="button button-primary">Guardar fecha</button>'
-            . ( $m->next_maintenance_date ? '<button type="submit" name="clear_date" value="1" formnovalidate class="button" style="color:#d63638;border-color:#d63638">Quitar fecha</button>' : '' )
-            . '</div></form></div>';
-
-        // KPIs
-        echo '<div class="cmh-grid">';
-        // v2.3 — Las tarjetas llevan a la lista de esta misma máquina, ya filtrada.
+        // ── Indicadores en dos niveles (v2.4) ────────────────────────────
+        // Cuatro que se miran a diario, grandes; los otros seis en una franja
+        // compacta debajo. Siguen estando todos y siguen enlazando a su lista.
         $mu = function ( $args = [] ) use ( $machine_id ) {
             return self::interv_url( array_merge( [ 'machine_id' => $machine_id ], $args ) );
         };
-        self::metric_card( 'Intervenciones',    $stats->total,                                                 'historial',        'blue',   $mu() );
-        self::metric_card( 'Preventivos',       (int) $stats->preventivos,                                     'historial',        'ok',     $mu( [ 'type' => 'preventivo' ] ) );
-        self::metric_card( 'Correctivos/Averías',(int) $stats->correctivos,                                    'historial',        'warn',   $mu( [ 'affects' => 1 ] ) );
-        self::metric_card( 'H. parada averías', number_format( (float)$stats->downtime_averia, 2, ',', '.' ) . ' h', 'historial',  'danger', $mu( [ 'affects' => 1 ] ) );
-        self::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ), CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc );
-        self::metric_card( 'MTTR',              CMH_Metrics::fmt_mttr( $mttr_all ),                            'historial',        'warn',   $mu( [ 'affects' => 1 ] ) );
-        self::metric_card( 'MTBF',              CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( $machine_id, 12 ) ), 'últimos 12 meses', 'blue' );
-        self::metric_card( 'Costo total',       '$' . number_format( (float)$stats->cost, 0, ',', '.' ),       'historial',        'blue',   $mu() );
-        self::metric_card( 'Por cobrar',        '$' . number_format( (float)$stats->por_cobrar, 0, ',', '.' ), 'saldo pendiente',
-            (float)$stats->por_cobrar > 0 ? 'warn' : 'ok', $mu( [ 'pay' => 'pending' ] ) );
-        self::metric_card( 'Horómetro',         number_format( (float)$m->current_hourmeter, 2, ',', '.' ) . ' h', 'actual',       'blue' );
+
+        echo '<div class="cmh-grid-primary">';
+        self::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ),
+            CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc,
+            self::admin_url( CMH_SLUG . '-reports', [ 'machine_id' => $machine_id ] ) );
+        self::metric_card( 'Intervenciones', $stats->total, 'historial completo', 'blue', $mu() );
+        self::metric_card( 'Por cobrar', '$' . number_format( (float) $stats->por_cobrar, 0, ',', '.' ),
+            'saldo pendiente', (float) $stats->por_cobrar > 0 ? 'warn' : 'ok', $mu( [ 'pay' => 'pending' ] ) );
+        self::metric_card( 'Costo total', '$' . number_format( (float) $stats->cost, 0, ',', '.' ),
+            'historial completo', 'blue', $mu() );
         echo '</div>';
+
+        echo '<div class="cmh-stats-strip">';
+        self::stat_item( 'Preventivos',      (int) $stats->preventivos, $mu( [ 'type' => 'preventivo' ] ) );
+        self::stat_item( 'Correctivos/Averías', (int) $stats->correctivos, $mu( [ 'affects' => 1 ] ) );
+        self::stat_item( 'H. parada averías', number_format( (float) $stats->downtime_averia, 1, ',', '.' ) . ' h', $mu( [ 'affects' => 1 ] ) );
+        self::stat_item( 'MTTR',            CMH_Metrics::fmt_mttr( $mttr_all ) );
+        self::stat_item( 'MTBF',            CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( $machine_id, 12 ) ) );
+        self::stat_item( 'Horómetro',       number_format( (float) $m->current_hourmeter, 1, ',', '.' ) . ' h' );
+        echo '</div>';
+
 
         // Tabs
         echo '<div class="cmh-tabs-wrapper">'
@@ -755,7 +903,7 @@ class CMH_Admin {
             . '<a href="#tab-editar"   class="cmh-tab" data-tab="editar">Editar</a>'
             . '</div>';
 
-        echo '<div class="cmh-layout"><div class="cmh-main">';
+        echo '<div class="cmh-main">';   // v2.4 — a todo el ancho: la columna lateral se fue a ventanas
 
         // Tab: Resumen
         echo '<div id="tab-resumen" class="cmh-tab-panel cmh-panel"><h2>Datos de la máquina</h2>'
@@ -830,12 +978,36 @@ class CMH_Admin {
             . '</div>';
         echo '</div>';
 
-        echo '</div><div class="cmh-side">';
-        echo '<div class="cmh-panel"><h2>Registrar intervención</h2>';
+        echo '</div></div>';   // cierra .cmh-main y .cmh-tabs-wrapper
+
+        // ── Formularios que se abren en ventana (v2.4) ────────────────────
+        // Antes vivían en una columna fija de 340px que estrechaba la tabla y
+        // los dejaba apretados. Ahora el HTML está aquí, oculto, y el modal lo
+        // trae al abrirse y lo devuelve al cerrarse, sin perder lo escrito.
+        echo '<div id="cmh-box-intervencion" style="display:none">';
         self::intervention_form( $machine_id, (float) $m->current_hourmeter, $m->status );
-        echo '</div><div class="cmh-panel"><h2>Anexar PDF / archivo</h2>';
+        echo '</div>';
+
+        echo '<div id="cmh-box-archivo" style="display:none">';
         self::upload_form( $machine_id );
-        echo '</div></div></div></div>'; // close tabs-wrapper
+        echo '</div>';
+
+        echo '<div id="cmh-box-programar" style="display:none">';
+        self::form_start( 'cm_schedule_maintenance' );
+        echo '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
+            . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ) ) . '">'
+            . '<div class="cmh-form-grid">'
+            . '<label>Fecha del próximo mantenimiento'
+            . '<input type="date" name="next_maintenance_date" value="' . esc_attr( $m->next_maintenance_date ?: '' ) . '" min="' . esc_attr( current_time( 'Y-m-d' ) ) . '" required></label>'
+            . '<label>Repetir cada'
+            . CMH_Schedule::interval_field( (int) ( $m->maintenance_interval_days ?? 0 ) ) . '</label>'
+            . '</div>'
+            . '<p class="cmh-hint" style="margin-top:12px">Solo fija la fecha del próximo mantenimiento. No crea una intervención. '
+            . 'Si las tareas automáticas están activas, se creará la tarea para el técnico principal.</p>'
+            . '<div class="cmh-form-actions">'
+            . '<button class="button button-primary">Guardar fecha</button>'
+            . ( $m->next_maintenance_date ? '<button type="submit" name="clear_date" value="1" formnovalidate class="button" style="color:#d63638;border-color:#d63638">Quitar fecha</button>' : '' )
+            . '</div></form></div>';
 
         self::page_footer();
     }
@@ -844,12 +1016,38 @@ class CMH_Admin {
     // Componentes UI
     // =========================================================================
 
-    private static function empty_state( $icon, $title, $desc = '' ) {
+    /**
+     * Estado vacío con salida (v2.4).
+     *
+     * Una pantalla vacía que solo dice «sin datos» deja al usuario sin saber
+     * qué sigue. El cuarto argumento agrega el botón de lo que toca hacer:
+     * `[ 'label' => …, 'modal' => 'cmh-box-…' ]` abre el formulario que ya está
+     * en la página, y `[ 'label' => …, 'url' => … ]` lleva a otra pantalla.
+     */
+    private static function empty_state( $icon, $title, $desc = '', $cta = [] ) {
         echo '<div class="cmh-empty">'
             . '<div class="cmh-empty-icon"><span class="dashicons ' . esc_attr( $icon ) . '"></span></div>'
             . '<strong>' . esc_html( $title ) . '</strong>'
             . ( $desc ? '<p>' . esc_html( $desc ) . '</p>' : '' )
+            . self::empty_state_cta( $cta )
             . '</div>';
+    }
+
+    private static function empty_state_cta( $cta ) {
+        if ( empty( $cta['label'] ) ) return '';
+
+        if ( ! empty( $cta['modal'] ) ) {
+            return '<div class="cmh-empty-actions"><button type="button" class="button button-primary cmh-open-modal" '
+                . 'data-target="' . esc_attr( $cta['modal'] ) . '" '
+                . 'data-title="' . esc_attr( $cta['title'] ?? $cta['label'] ) . '" '
+                . 'data-subtitle="' . esc_attr( $cta['subtitle'] ?? '' ) . '">'
+                . esc_html( $cta['label'] ) . '</button></div>';
+        }
+        if ( ! empty( $cta['url'] ) ) {
+            return '<div class="cmh-empty-actions"><a class="button button-primary" href="' . esc_url( $cta['url'] ) . '">'
+                . esc_html( $cta['label'] ) . '</a></div>';
+        }
+        return '';
     }
 
     private static function empty_state_inline( $msg ) {
@@ -876,11 +1074,29 @@ class CMH_Admin {
                 FROM {$t['machines']} m JOIN {$t['companies']} c ON c.id=m.company_id JOIN {$t['cities']} ci ON ci.id=m.city_id LEFT JOIN {$t['branches']} b ON b.id=m.branch_id $w ORDER BY m.machine_code";
         $rows = $params ? $wpdb->get_results( $wpdb->prepare( $sql, $params ) ) : $wpdb->get_results( $sql );
 
-        if ( ! $rows ) { self::empty_state( 'dashicons-hammer', 'Sin máquinas', 'No hay máquinas con esos filtros.' ); return; }
+        if ( ! $rows ) {
+            // La salida depende de por qué está vacío: filtrando se ofrece quitar
+            // el filtro; dentro de una ciudad o sucursal, agregar la máquina.
+            $filtrando = (bool) array_filter( (array) $filters, function ( $v ) { return $v !== '' && $v !== null; } );
+            if ( $filtrando ) {
+                self::empty_state( 'dashicons-hammer', 'Sin máquinas', 'Ninguna máquina coincide con estos filtros.',
+                    [ 'label' => 'Ver todas las máquinas', 'url' => self::admin_url( CMH_SLUG . '-machines' ) ] );
+            } elseif ( $city_id || $branch_id ) {
+                self::empty_state( 'dashicons-hammer', 'Sin máquinas', 'Aquí todavía no hay ninguna máquina registrada.',
+                    [ 'label' => 'Agregar la primera máquina', 'modal' => 'cmh-box-maquina', 'title' => 'Agregar máquina' ] );
+            } else {
+                self::empty_state( 'dashicons-hammer', 'Sin máquinas', 'Aún no hay máquinas registradas.' );
+            }
+            return;
+        }
 
-        echo '<table class="widefat cmh cmh-machine-table"><thead><tr>'
-            . '<th>Código</th><th>Marca / Modelo</th><th>Serial</th><th>Ubicación</th>'
-            . '<th>Horómetro</th><th>Estado</th><th>Interv.</th><th>Última</th><th></th>'
+        // v2.4 — Buscador que filtra al escribir y encabezados que ordenan.
+        echo '<div class="cmh-tablebar">'
+            . '<input type="search" class="cmh-table-search" data-table="cmh-tbl-maquinas" placeholder="Filtrar por código, marca, serial, ubicación…">'
+            . '<span class="cmh-count"></span></div>';
+        echo '<div class="cmh-table-scroll"><table id="cmh-tbl-maquinas" class="widefat cmh cmh-machine-table cmh-sortable"><thead><tr>'
+            . '<th data-sort="text">Código</th><th data-sort="text">Marca / Modelo</th><th data-sort="text">Serial</th><th data-sort="text">Ubicación</th>'
+            . '<th data-sort="num">Horómetro</th><th data-sort="text">Estado</th><th data-sort="num">Interv.</th><th data-sort="text">Última</th><th></th>'
             . '</tr></thead><tbody>';
         foreach ( $rows as $r ) {
             $loc = $r->company_name . ' / ' . $r->city_name . ( $r->branch_name ? ' / ' . $r->branch_name : '' );
@@ -897,7 +1113,7 @@ class CMH_Admin {
                 . '<td><a class="button button-small" href="' . $url . '">Hoja de vida</a></td>'
                 . '</tr>';
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div>';
     }
 
     public static function machines_mini_table() {
@@ -980,7 +1196,14 @@ class CMH_Admin {
         $rows  = $wpdb->get_results(
             "SELECT i.*, m.machine_code, f.file_url FROM {$t['interventions']} i LEFT JOIN {$t['machines']} m ON m.id=i.machine_id LEFT JOIN {$t['files']} f ON f.intervention_id=i.id $where GROUP BY i.id ORDER BY i.intervention_date DESC, i.id DESC LIMIT " . intval( $limit )
         );
-        if ( ! $rows ) { self::empty_state( 'dashicons-calendar-alt', 'Sin intervenciones', 'Aún no hay registros.' ); return; }
+        if ( ! $rows ) {
+            self::empty_state( 'dashicons-calendar-alt', 'Sin intervenciones',
+                'Entran solas cuando un técnico envía un formato, y también se pueden registrar a mano desde la máquina.',
+                $machine_id
+                    ? [ 'label' => 'Registrar la primera intervención', 'modal' => 'cmh-box-intervencion', 'title' => 'Registrar intervención' ]
+                    : [ 'label' => 'Ir a las máquinas', 'url' => self::admin_url( CMH_SLUG . '-machines' ) ] );
+            return;
+        }
 
         echo '<table class="widefat cmh"><thead><tr><th>Fecha</th><th>Máquina</th><th>Tipo</th><th>Técnico</th><th>H. parada</th><th>Costo</th><th>Pago</th><th>PDF</th></tr></thead><tbody>';
         foreach ( $rows as $r ) {
@@ -1183,7 +1406,8 @@ class CMH_Admin {
 
         if ( ! $rows ) {
             echo '<div class="cmh-panel">';
-            self::empty_state( 'dashicons-search', 'Nada con estos filtros', 'Prueba a quitar alguno o a ampliar la búsqueda.' );
+            self::empty_state( 'dashicons-search', 'Nada con estos filtros', 'Prueba a quitar alguno o a ampliar la búsqueda.',
+                [ 'label' => 'Quitar los filtros', 'url' => self::interv_url( [] ) ] );
             echo '</div>';   // cierra .cmh-panel; page_footer cierra el .wrap
             self::page_footer();
             return;
@@ -1275,7 +1499,8 @@ class CMH_Admin {
     public static function intervention_table( $machine_id ) {
         $rows = self::machine_interventions( $machine_id );
         if ( ! $rows ) {
-            self::empty_state( 'dashicons-calendar-alt', 'Sin intervenciones', 'Registra la primera en el formulario de la derecha.' );
+            self::empty_state( 'dashicons-calendar-alt', 'Sin intervenciones', 'Esta máquina todavía no tiene ninguna registrada.',
+                [ 'label' => 'Registrar la primera intervención', 'modal' => 'cmh-box-intervencion', 'title' => 'Registrar intervención' ] );
             return;
         }
 
@@ -1321,7 +1546,11 @@ class CMH_Admin {
     public static function intervention_cards( $machine_id ) {
         // v2.3 — Misma fuente que la tabla, así las dos vistas no pueden diferir.
         $rows = self::machine_interventions( $machine_id );
-        if ( ! $rows ) { self::empty_state( 'dashicons-calendar-alt', 'Sin intervenciones', 'Registra la primera intervención en el formulario de la derecha.' ); return; }
+        if ( ! $rows ) {
+            self::empty_state( 'dashicons-calendar-alt', 'Sin intervenciones', 'Esta máquina todavía no tiene ninguna registrada.',
+                [ 'label' => 'Registrar la primera intervención', 'modal' => 'cmh-box-intervencion', 'title' => 'Registrar intervención' ] );
+            return;
+        }
 
 
         // v2.3 — Los filtros salen de la taxonomía: un tipo nuevo aparece aquí solo.
@@ -1410,7 +1639,11 @@ class CMH_Admin {
 
     public static function availability_table( $machine_id ) {
         $breakdown = CMH_Metrics::monthly_breakdown( $machine_id, 13 );
-        if ( empty( $breakdown ) ) { self::empty_state( 'dashicons-chart-area', 'Sin datos', 'Registra intervenciones para ver el historial de disponibilidad mensual.' ); return; }
+        if ( empty( $breakdown ) ) {
+            self::empty_state( 'dashicons-chart-area', 'Sin datos', 'La disponibilidad mensual se calcula a partir de las intervenciones de la máquina.',
+                [ 'label' => 'Registrar una intervención', 'modal' => 'cmh-box-intervencion', 'title' => 'Registrar intervención' ] );
+            return;
+        }
 
         echo '<table class="widefat cmh cmh-avail-table"><thead><tr>'
             . '<th>Mes</th><th>H. programadas</th><th>H. parada averías</th>'
@@ -1439,23 +1672,19 @@ class CMH_Admin {
      * Taxonomía estándar de sistemas/fallas (viene de la plantilla Excel del cliente).
      * Fuente única: la usan el formulario de intervención y los reportes.
      */
+    /** v2.3.1 — Delegado en la taxonomía configurable. */
     public static function failure_systems() {
-        return [
-            'frenos'        => 'Frenos',
-            'potencia'      => 'Potencia',
-            'traccion'      => 'Tracción',
-            'seguridad'     => 'Seguridad',
-            'encendido'     => 'Encendido',
-            'refrigeracion' => 'Refrigeración',
-            'mastil'        => 'Mástil',
-            'direccion'     => 'Dirección',
-            'combustible'   => 'Combustible',
-            'hidraulico'    => 'Sist. Hidráulico',
-            'electronico'   => 'Electrónico',
-            'otro'          => 'Otro',
-        ];
+        return CMH_Taxonomy::system_labels();
     }
 
+    /**
+     * Formulario de intervención.
+     *
+     * v2.4 — Se abre en ventana, no en la columna estrecha de la derecha, así que
+     * los campos se reparten en rejilla por secciones en vez de apilarse en una
+     * sola columna larguísima. Los nombres, ids y clases son los mismos: lo que
+     * cambia es cómo se acomodan, no qué envían.
+     */
     public static function intervention_form( $machine_id, $last_hourmeter = 0, $current_status = 'activa' ) {
         $systems = self::failure_systems();
 
@@ -1463,74 +1692,88 @@ class CMH_Admin {
         echo '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ) ) . '">';
 
-        echo '<label>Fecha <em>*</em></label><input type="date" name="intervention_date" value="' . esc_attr( current_time( 'Y-m-d' ) ) . '" required>'
-            . '<label>Tipo <em>*</em></label>'
-            . '<select name="maintenance_type" id="cmh-mtype">';
+        // ── Lo esencial ──────────────────────────────────────────────────
+        echo '<fieldset class="cmh-fieldset"><legend>Datos de la intervención</legend>'
+            . '<div class="cmh-form-grid">'
+            . '<label>Fecha <em>*</em><input type="date" name="intervention_date" value="' . esc_attr( current_time( 'Y-m-d' ) ) . '" required></label>'
+            . '<label>Tipo <em>*</em><select name="maintenance_type" id="cmh-mtype">';
         foreach ( CMH_Taxonomy::mtype_labels() as $mk => $ml )
             echo '<option value="' . esc_attr( $mk ) . '" data-affects="' . ( CMH_Taxonomy::mtype_affects( $mk ) ? '1' : '0' ) . '">' . esc_html( $ml ) . '</option>';
-        echo '</select>'
-            . '<label>Técnico</label><input name="technician">'
-            . '<label>Horómetro</label>'
-            . '<input type="number" step="0.01" name="hourmeter" min="0" id="cmh-hourmeter-input" data-last-hourmeter="' . esc_attr( $last_hourmeter ) . '">'
-            . '<div id="cmh-hourmeter-warn" class="cmh-field-warning" style="display:none"></div>';
+        echo '</select></label>'
+            . '<label>Técnico<input name="technician"></label>'
+            . '<label>Horómetro<input type="number" step="0.01" name="hourmeter" min="0" id="cmh-hourmeter-input" data-last-hourmeter="' . esc_attr( $last_hourmeter ) . '"></label>'
+            . '</div>'
+            . '<div id="cmh-hourmeter-warn" class="cmh-field-warning" style="display:none"></div>'
+            . '</fieldset>';
 
-        echo '<div id="cmh-downtime-fields" class="cmh-form-section">'
-            . '<p class="cmh-form-section-title">Falla / Parada</p>'
-            . '<label>Sistema / Falla</label><select name="failure_system"><option value="">— Seleccionar —</option>';
+        // ── Falla y parada (solo cuando el tipo lo pide) ──────────────────
+        echo '<fieldset class="cmh-fieldset" id="cmh-downtime-fields"><legend>Falla y parada</legend>'
+            . '<div class="cmh-form-grid">'
+            . '<label>Sistema / falla<select name="failure_system"><option value="">— Seleccionar —</option>';
         foreach ( $systems as $k => $v ) echo '<option value="' . esc_attr( $k ) . '">' . esc_html( $v ) . '</option>';
-        echo '</select>'
-            . '<label>Horas parada <span class="cmh-optional">(averías)</span></label>'
-            . '<input type="number" step="0.01" name="downtime_hours" value="0" min="0">'
-            . '</div>';
+        echo '</select></label>'
+            . '<label>Horas de parada <span class="cmh-optional">(averías)</span>'
+            . '<input type="number" step="0.01" name="downtime_hours" value="0" min="0"></label>'
+            . '</div></fieldset>';
 
-        echo '<div class="cmh-form-section">'
-            . '<p class="cmh-form-section-title">Datos adicionales</p>'
-            . '<label>Horas trabajadas</label><input type="number" step="0.01" name="worked_hours" value="0" min="0">'
-            . '<label>Costo</label><input type="number" step="100" name="cost" id="cmh-cost-input" value="0" min="0">'
-            . '<div id="cmh-av-row">'
-            . '<label><input type="checkbox" name="affects_availability" value="1"> Afecta disponibilidad'
-            . ' <span class="cmh-auto-note" style="display:none;color:#2271b1;font-size:11px">(automático según tipo)</span></label>'
-            . '</div></div>';
+        // ── Tiempos y costo ──────────────────────────────────────────────
+        echo '<fieldset class="cmh-fieldset"><legend>Tiempos y costo</legend>'
+            . '<div class="cmh-form-grid">'
+            . '<label>Horas trabajadas<input type="number" step="0.01" name="worked_hours" value="0" min="0"></label>'
+            . '<label>Costo<input type="number" step="100" name="cost" id="cmh-cost-input" value="0" min="0"></label>'
+            . '</div>'
+            . '<div id="cmh-av-row" style="margin-top:8px">'
+            . '<label class="cmh-inline-check"><input type="checkbox" name="affects_availability" value="1"> Afecta disponibilidad'
+            . ' <span class="cmh-auto-note" style="display:none;color:#2271b1;font-size:11px">(automático según el tipo)</span></label>'
+            . '</div></fieldset>';
 
-        echo '<div class="cmh-form-section cmh-payment-section">'
-            . '<p class="cmh-form-section-title">Pago</p>'
-            . '<label>Estado de pago</label><select name="payment_status" id="cmh-payment-status">';
+        // ── Cobro ────────────────────────────────────────────────────────
+        echo '<fieldset class="cmh-fieldset cmh-payment-section"><legend>Cobro</legend>'
+            . '<div class="cmh-form-grid">'
+            . '<label>Estado de pago<select name="payment_status" id="cmh-payment-status">';
         foreach ( self::payment_statuses() as $k => $v ) echo '<option value="' . esc_attr( $k ) . '">' . esc_html( $v ) . '</option>';
-        echo '</select>'
-            . '<label>Monto abonado</label><input type="number" step="100" name="paid_amount" id="cmh-paid-input" value="0" min="0">'
-            . '<p id="cmh-saldo-hint" style="font-size:12px;color:#646970;margin:6px 0 0">Saldo = costo − abonado.</p>'
-            . '</div>';
+        echo '</select></label>'
+            . '<label>Monto abonado<input type="number" step="100" name="paid_amount" id="cmh-paid-input" value="0" min="0"></label>'
+            . '</div>'
+            . '<p id="cmh-saldo-hint" class="cmh-hint" style="margin:8px 0 0">Saldo = costo − abonado.</p>'
+            . '</fieldset>';
 
-        // Estado automático (V0.8)
-        echo '<div class="cmh-form-section" id="cmh-status-row">'
-            . '<p class="cmh-form-section-title">Actualizar estado de la máquina</p>'
-            . '<label>Estado actual: ' . self::status_badge( $current_status ) . '<br>Nuevo estado <span class="cmh-optional">(opcional)</span></label>'
-            . '<select name="new_machine_status"><option value="">— Mantener estado actual —</option>'
+        // ── Estado de la máquina y próxima fecha ─────────────────────────
+        echo '<fieldset class="cmh-fieldset" id="cmh-status-row"><legend>Después de esta intervención</legend>'
+            . '<div class="cmh-form-grid">'
+            . '<label>Estado de la máquina <span class="cmh-optional">(ahora: ' . wp_strip_all_tags( self::status_badge( $current_status ) ) . ')</span>'
+            . '<select name="new_machine_status"><option value="">— Mantener el actual —</option>'
             . '<option value="activa">Activa</option>'
             . '<option value="mantenimiento">En mantenimiento</option>'
             . '<option value="inactiva">Inactiva</option>'
             . '<option value="fuera_servicio">Fuera de servicio</option>'
-            . '</select></div>';
+            . '</select></label>'
+            . '<label>Próximo mantenimiento <span class="cmh-optional">(opcional)</span>'
+            . '<input type="date" name="next_maintenance_date" min="' . esc_attr( current_time( 'Y-m-d' ) ) . '"></label>'
+            . '</div></fieldset>';
 
-        echo '<div class="cmh-form-section">'
-            . '<p class="cmh-form-section-title">Detalle del servicio</p>'
-            . '<label>Repuestos / insumos</label><textarea name="parts"></textarea>'
-            . '<label>Servicios prestados</label><textarea name="services"></textarea>'
-            . '<label>Observaciones</label><textarea name="observations"></textarea>'
-            . '</div>'
-            . '<div class="cmh-form-section">'
-            . '<p class="cmh-form-section-title">Programar próximo mantenimiento</p>'
-            . '<label>Fecha <span class="cmh-optional">(opcional)</span><input type="date" name="next_maintenance_date" min="' . esc_attr( current_time( 'Y-m-d' ) ) . '"></label>'
-            . '<p style="font-size:12px;color:#646970;margin:2px 0 0">Actualiza la fecha en la hoja de vida de la máquina.</p>'
-            . '</div>'
-            . '<button class="button button-primary">Guardar intervención</button></form>';
+        // ── Detalle libre ────────────────────────────────────────────────
+        echo '<fieldset class="cmh-fieldset"><legend>Detalle del servicio</legend>'
+            . '<label>Repuestos / insumos<textarea name="parts" rows="2"></textarea></label>'
+            . '<label>Servicios prestados<textarea name="services" rows="2"></textarea></label>'
+            . '<label>Observaciones<textarea name="observations" rows="2"></textarea></label>'
+            . '</fieldset>';
+
+        echo '<div class="cmh-form-actions">'
+            . '<button class="button button-primary">Guardar intervención</button>'
+            . '<span class="cmh-dirty-flag">Tienes cambios sin guardar</span>'
+            . '</div></form>';
     }
 
     public static function files_table( $machine_id = 0 ) {
         global $wpdb; $t = CMH_Core::tables();
         $where = $machine_id ? $wpdb->prepare( 'WHERE machine_id=%d', $machine_id ) : '';
         $rows  = $wpdb->get_results( "SELECT * FROM {$t['files']} $where ORDER BY id DESC LIMIT 100" );
-        if ( ! $rows ) { self::empty_state( 'dashicons-media-document', 'Sin archivos', 'Sube el primer PDF usando el formulario de la derecha.' ); return; }
+        if ( ! $rows ) {
+            self::empty_state( 'dashicons-media-document', 'Sin archivos', 'Aquí se guardan los PDF que genera cada formato y lo que anexes a mano.',
+                $machine_id ? [ 'label' => 'Anexar el primer archivo', 'modal' => 'cmh-box-archivo', 'title' => 'Anexar PDF o archivo' ] : [] );
+            return;
+        }
         echo '<table class="widefat cmh"><thead><tr><th>Archivo</th><th>Intervención</th><th>Fecha</th></tr></thead><tbody>';
         foreach ( $rows as $r )
             echo '<tr><td><a target="_blank" href="' . esc_url( $r->file_url ) . '">' . esc_html( $r->file_name ) . '</a></td>'
