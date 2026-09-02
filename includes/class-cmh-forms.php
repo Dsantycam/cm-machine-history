@@ -186,12 +186,7 @@ class CMH_Forms {
     }
     /** Tipos de mantenimiento que entiende el plugin. */
     public static function maintenance_types() {
-        return [
-            'preventivo' => 'Preventivo',
-            'correctivo' => 'Correctivo',
-            'averia'     => 'Avería',
-            'evaluacion' => 'Evaluación',
-        ];
+        return CMH_Taxonomy::mtype_labels();   // v2.3 — configurables desde Ajustes
     }
 
     // =========================================================================

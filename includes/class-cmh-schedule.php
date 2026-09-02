@@ -67,6 +67,7 @@ class CMH_Schedule {
             'auto_task'         => 1,   // auto-generar tarea al vencer el mantenimiento
             'auto_task_title'   => 'Mantenimiento preventivo programado',
             'auto_task_when'    => 'immediate', // 'immediate' o 'window'
+            'auto_complete_task' => 1,  // cerrar la tarea al llegar su intervención
             'time_max_hours'    => 12,  // tope por tramo de trabajo del técnico
             'delete_data_on_uninstall' => 0, // al eliminar el plugin, NO borrar datos
             'last_run'          => '',  // 'Y-m-d H:i:s' (hora local del sitio)
@@ -663,6 +664,9 @@ class CMH_Schedule {
             . 'Solo cuando entre en la ventana de alerta de arriba</label>'
             . '<p style="font-size:12px;color:#646970;margin:6px 0 0">Si cambias la fecha de un mantenimiento, la tarea se mueve con ella en vez de quedar una vieja suelta. '
             . 'La tarea se asigna al <strong>técnico principal</strong> de la máquina, que marcas en la pestaña Técnicos de su hoja de vida.</p>'
+            . '<label><input type="checkbox" name="auto_complete_task" value="1" ' . checked( $s['auto_complete_task'], 1, false ) . '> '
+            . 'Dar la tarea por <strong>completada</strong> cuando llegue su intervención</label>'
+            . '<p class="cmh-hint">Se cierra la tarea que esté <em>en curso</em> para esa máquina; si hay varias, la del técnico que firma el formulario. Una tarea pendiente que nadie abrió nunca se cierra sola. El botón «Completar» está siempre disponible en las listas.</p>'
             . '</div>'
 
             . '<div class="cmh-form-section">'
@@ -671,7 +675,7 @@ class CMH_Schedule {
             . '<input type="number" name="time_max_hours" min="1" max="24" step="1" value="' . esc_attr( (int) $s['time_max_hours'] ) . '" style="max-width:120px"></label>'
             . '<p style="font-size:12px;color:#646970;margin:6px 0 0">El reloj de una tarea arranca cuando el técnico la pone «En progreso» y para cuando la marca «Completada». '
             . 'Si olvida cerrarla, este tope evita que el reloj corra toda la noche: al cerrar se recorta a este máximo y queda la nota, y el proceso diario cierra solo lo que siga abierto. '
-            . 'Puedes corregir cualquier tramo a mano en <a href="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-time' ) ) . '">Máquinas → Horas técnicos</a>.</p>'
+            . 'Puedes corregir cualquier tramo a mano en <a href="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-time' ) ) . '">Máquinas → Equipo técnico</a>.</p>'
             . '</div>'
 
             . '<div class="cmh-form-section">'
@@ -684,6 +688,9 @@ class CMH_Schedule {
             . '</div>'
 
             . '<button class="button button-primary">Guardar ajustes</button></form></div>';
+
+        // v2.3 — Listas configurables: tipos de mantenimiento y estados de pago.
+        CMH_Taxonomy::render_settings_panels();
 
         // Vista previa de lo que se enviaría hoy.
         $machines = self::due_machines( $days );
@@ -718,6 +725,7 @@ class CMH_Schedule {
             'auto_task'         => isset( $_POST['auto_task'] ) ? 1 : 0,
             'auto_task_title'   => sanitize_text_field( $_POST['auto_task_title'] ?? '' ) ?: 'Mantenimiento preventivo programado',
             'auto_task_when'    => ( ( $_POST['auto_task_when'] ?? '' ) === 'window' ) ? 'window' : 'immediate',
+            'auto_complete_task' => isset( $_POST['auto_complete_task'] ) ? 1 : 0,
             'time_max_hours'    => min( 24, max( 1, (int) ( $_POST['time_max_hours'] ?? 12 ) ) ),
             'delete_data_on_uninstall' => isset( $_POST['delete_data_on_uninstall'] ) ? 1 : 0,
         ] );

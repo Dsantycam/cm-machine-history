@@ -31,6 +31,7 @@ class CMH_Tech {
         add_action( 'admin_post_cmh_tech_update_task',   [ __CLASS__, 'tech_update_task' ] );
         add_action( 'admin_post_cmh_tech_save_intervention', [ __CLASS__, 'tech_save_intervention' ] );
         add_action( 'admin_post_cmh_open_task_form',     [ __CLASS__, 'open_task_form' ] );
+        add_action( 'admin_post_cmh_complete_task',      [ __CLASS__, 'complete_task' ] );
     }
 
     public static function admin_menu() {
@@ -280,6 +281,60 @@ class CMH_Tech {
         exit;
     }
 
+
+    /**
+     * v2.3 — Cierra una tarea de un clic, desde donde se la esté viendo.
+     *
+     * Hasta la v2.2 el único control de estado vivía dentro de la ficha de la
+     * máquina, así que el técnico enviaba el formulario en otra pestaña y no
+     * tenía dónde darla por terminada sin ir a buscarla. Ahora el botón está en
+     * todas las listas, y además la tarea se cierra sola al entrar la
+     * intervención (ver CMH_Integration::close_task_for_machine).
+     */
+    public static function complete_task() {
+        if ( ! is_user_logged_in() ) wp_die( 'Sin permisos.' );
+        check_admin_referer( 'cmh_action' );
+
+        global $wpdb; $t = CMH_Core::tables();
+        $task_id = intval( $_POST['task_id'] ?? 0 );
+        $task    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['tasks']} WHERE id=%d", $task_id ) );
+        if ( ! $task ) wp_die( 'Tarea no encontrada.' );
+
+        $is_admin = current_user_can( 'edit_others_posts' );
+        if ( ! $is_admin ) {
+            if ( ! current_user_can( 'cmh_tech' ) ) wp_die( 'Sin permisos.' );
+            if ( ! self::can_access_machine( (int) $task->machine_id ) ) wp_die( 'No tienes acceso a esta tarea.' );
+        }
+
+        $status = ( ( $_POST['to'] ?? 'completada' ) === 'pendiente' ) ? 'pendiente' : 'completada';
+
+        $wpdb->update( $t['tasks'],
+            [ 'status' => $status, 'updated_at' => current_time( 'mysql' ) ],
+            [ 'id' => $task_id ]
+        );
+        // El reloj de horas sigue al estado: cerrar la tarea cierra el tramo.
+        CMH_Time::on_status_change( $task, $status, get_current_user_id() );
+
+        $fallback = $is_admin
+            ? CMH_Admin::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $task->machine_id ] )
+            : CMH_Admin::admin_url( 'cmh-tech' );
+
+        CMH_Admin::redirect_to( $fallback,
+            $status === 'completada' ? 'Tarea completada.' : 'Tarea reabierta como pendiente.' );
+    }
+
+    /** Botón de un clic para cerrar o reabrir una tarea. */
+    public static function complete_button( $task, $back = '' ) {
+        $done = ( $task->status === 'completada' );
+        return '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline">'
+            . '<input type="hidden" name="action" value="cmh_complete_task">'
+            . '<input type="hidden" name="task_id" value="' . intval( $task->id ) . '">'
+            . '<input type="hidden" name="to" value="' . ( $done ? 'pendiente' : 'completada' ) . '">'
+            . ( $back ? '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">' : '' )
+            . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+            . '<button class="button button-small' . ( $done ? '' : ' button-primary' ) . '">'
+            . ( $done ? 'Reabrir' : 'Completar' ) . '</button></form>';
+    }
     public static function task_status_badge( $status ) {
         $status = sanitize_key( $status );
         $styles = [
@@ -347,7 +402,7 @@ class CMH_Tech {
         echo '<div class="cmh-panel"><h2>Mis tareas pendientes <small style="font-weight:400;font-size:13px;color:#646970">— ' . count( $tasks ) . '</small></h2>';
         if ( $tasks ) {
             $back = CMH_Admin::admin_url( 'cmh-tech' );
-            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Máquina</th><th>Vence</th><th>Estado</th><th>Formato</th><th></th></tr></thead><tbody>';
+            echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr><th>Tarea</th><th>Máquina</th><th>Vence</th><th>Estado</th><th>Formato</th><th></th></tr></thead><tbody>';
             foreach ( $tasks as $ta ) {
                 echo '<tr>'
                     . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 20 ) ) . '</span>' : '' ) . '</td>'
@@ -355,10 +410,11 @@ class CMH_Tech {
                     . '<td>' . self::due_label( $ta->due_date ) . '</td>'
                     . '<td>' . self::task_status_badge( $ta->status ) . '</td>'
                     . '<td>' . self::open_form_control( $ta, $back ) . '</td>'
-                    . '<td><a class="button button-small" href="' . esc_url( CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $ta->machine_id ] ) ) . '#cmh-tech-tareas">Ver máquina</a></td>'
+                    . '<td class="cmh-row-actions">' . self::complete_button( $ta, $back )
+                    . '<a class="button button-small" href="' . esc_url( CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $ta->machine_id ] ) ) . '#cmh-tech-tareas">Ver máquina</a></td>'
                     . '</tr>';
             }
-            echo '</tbody></table>'
+            echo '</tbody></table></div>'
                 . '<p style="font-size:12px;color:#646970;margin:10px 0 0">«Abrir formato» abre el formulario en una pestaña nueva con los datos de la máquina ya cargados. La tarea pasa sola a «En progreso».</p>';
         } else {
             echo '<p style="color:#646970;font-size:13px;margin:4px 0 0">No tienes tareas pendientes. 🎉</p>';
@@ -494,7 +550,7 @@ class CMH_Tech {
             return;
         }
         $back = CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $machine_id ] );
-        echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Vence</th><th>Estado</th><th>Formato</th><th>Cambiar estado</th></tr></thead><tbody>';
+        echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr><th>Tarea</th><th>Vence</th><th>Estado</th><th>Formato</th><th>Cambiar estado</th></tr></thead><tbody>';
         foreach ( $tasks as $ta ) {
             echo '<tr>'
                 . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( $ta->notes ) . '</span>' : '' ) . '</td>'
@@ -512,7 +568,7 @@ class CMH_Tech {
             echo '</select><button class="button button-small">Actualizar</button></form></td>'
                 . '</tr>';
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div>';
     }
 
     /** Intervenciones recientes de la máquina, solo lectura (sin editar/eliminar). */
@@ -586,13 +642,9 @@ class CMH_Tech {
         return esc_html( $due_date ) . ' <span style="color:#646970">(en ' . $days . ' d)</span>';
     }
 
+    /** v2.3 — Delegado en la taxonomía configurable. */
     private static function mtype_badge( $type ) {
-        $styles = [ 'preventivo' => 'background:#e6f4ea;color:#1a6630', 'correctivo' => 'background:#fff3cd;color:#7a4f00', 'averia' => 'background:#fce8e8;color:#d63638', 'evaluacion' => 'background:#f0f0f1;color:#3c434a' ];
-        $labels = [ 'preventivo' => 'Preventivo', 'correctivo' => 'Correctivo', 'averia' => 'Avería', 'evaluacion' => 'Evaluación' ];
-        $key    = strtolower( $type );
-        $style  = $styles[ $key ] ?? 'background:#f0f0f1;color:#3c434a';
-        $label  = $labels[ $key ] ?? ucfirst( $type );
-        return '<span class="cmh-badge" style="' . $style . '">' . esc_html( $label ) . '</span>';
+        return CMH_Taxonomy::mtype_badge( $type );
     }
 
     // =========================================================================

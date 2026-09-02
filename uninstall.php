@@ -46,6 +46,9 @@ delete_option( 'cmh_migrated_paid_amount' );
 delete_option( 'cmh_forms' );
 // v2.0 — páginas de los formatos de Forminator y su caché de autodetección.
 delete_option( 'cmh_form_urls' );
+// v2.3 — listas configurables de tipos de mantenimiento y estados de pago.
+delete_option( 'cmh_mtypes' );
+delete_option( 'cmh_pstates' );
 foreach ( [ 215, 225, 226 ] as $cmh_form ) {
     delete_transient( 'cmh_form_url_' . $cmh_form );
 }
