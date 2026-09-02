@@ -22,6 +22,7 @@ class CMH_Core {
             'tasks'         => $p . 'tasks',
             'clients'       => $p . 'client_companies',
             'client_cities' => $p . 'client_cities',
+            'task_time'     => $p . 'task_time',
         ];
     }
 
@@ -179,6 +180,28 @@ class CMH_Core {
             KEY machine_id (machine_id),
             KEY assigned_to (assigned_to),
             KEY status (status)
+        ) $c;" );
+
+        // v2.1 — Tramos de trabajo del técnico sobre una tarea. El reloj arranca
+        // al pasar a «En progreso» y se cierra al completar o pausar; una tarea
+        // puede tener varios tramos. `ended_at` NULL = tramo abierto (corriendo).
+        dbDelta( "CREATE TABLE {$t['task_time']} (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            task_id    BIGINT UNSIGNED NOT NULL,
+            machine_id BIGINT UNSIGNED NOT NULL,
+            user_id    BIGINT UNSIGNED NOT NULL,
+            started_at DATETIME        NOT NULL,
+            ended_at   DATETIME        NULL,
+            seconds    INT UNSIGNED    NULL,
+            source     VARCHAR(20)     NOT NULL DEFAULT 'auto',
+            note       VARCHAR(190)    NULL,
+            created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY task_id (task_id),
+            KEY machine_id (machine_id),
+            KEY user_id (user_id),
+            KEY started_at (started_at),
+            KEY ended_at (ended_at)
         ) $c;" );
 
         // v0.10 — Acceso de clientes por empresa.

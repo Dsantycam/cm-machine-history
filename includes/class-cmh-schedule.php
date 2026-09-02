@@ -66,6 +66,7 @@ class CMH_Schedule {
             'alert_to_techs'    => 1,   // correo individual a cada técnico asignado
             'auto_task'         => 1,   // auto-generar tarea al vencer el mantenimiento
             'auto_task_title'   => 'Mantenimiento preventivo programado',
+            'time_max_hours'    => 12,  // tope por tramo de trabajo del técnico
             'last_run'          => '',  // 'Y-m-d H:i:s' (hora local del sitio)
             'last_summary'      => '',  // resumen legible de la última corrida
         ];
@@ -251,6 +252,10 @@ class CMH_Schedule {
         if ( ! $force && $s['last_run'] && substr( $s['last_run'], 0, 10 ) === $today ) {
             return [ 'machines' => 0, 'tasks' => 0, 'created' => 0, 'emails' => 0, 'skipped' => true ];
         }
+
+        // v2.1 — Cierra los relojes que quedaron corriendo más allá del tope
+        // (el técnico abrió la tarea y nunca la marcó como completada).
+        if ( class_exists( 'CMH_Time' ) ) CMH_Time::close_stale();
 
         $days     = max( 0, (int) $s['alert_days_before'] );
         $machines = self::due_machines( $days );
@@ -542,6 +547,15 @@ class CMH_Schedule {
             . '<p style="font-size:12px;color:#646970;margin:6px 0 0">Se le agrega el código de la máquina y se asigna al primer técnico asignado, si lo hay. No se duplica: una tarea por máquina y fecha programada.</p>'
             . '</div>'
 
+            . '<div class="cmh-form-section">'
+            . '<p class="cmh-form-section-title">Horas de técnicos</p>'
+            . '<label>Tope de horas por tramo de trabajo'
+            . '<input type="number" name="time_max_hours" min="1" max="24" step="1" value="' . esc_attr( (int) $s['time_max_hours'] ) . '" style="max-width:120px"></label>'
+            . '<p style="font-size:12px;color:#646970;margin:6px 0 0">El reloj de una tarea arranca cuando el técnico la pone «En progreso» y para cuando la marca «Completada». '
+            . 'Si olvida cerrarla, este tope evita que el reloj corra toda la noche: al cerrar se recorta a este máximo y queda la nota, y el proceso diario cierra solo lo que siga abierto. '
+            . 'Puedes corregir cualquier tramo a mano en <a href="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-time' ) ) . '">Máquinas → Horas técnicos</a>.</p>'
+            . '</div>'
+
             . '<button class="button button-primary">Guardar ajustes</button></form></div>';
 
         // Vista previa de lo que se enviaría hoy.
@@ -576,6 +590,7 @@ class CMH_Schedule {
             'alert_to_techs'    => isset( $_POST['alert_to_techs'] ) ? 1 : 0,
             'auto_task'         => isset( $_POST['auto_task'] ) ? 1 : 0,
             'auto_task_title'   => sanitize_text_field( $_POST['auto_task_title'] ?? '' ) ?: 'Mantenimiento preventivo programado',
+            'time_max_hours'    => min( 24, max( 1, (int) ( $_POST['time_max_hours'] ?? 12 ) ) ),
         ] );
 
         // Reprograma el job si se había perdido (p. ej. tras un cambio de cron).

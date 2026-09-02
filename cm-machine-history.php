@@ -3,7 +3,7 @@
  * Plugin Name: CM Machine History
  * Plugin URI:  https://santiagocamachomkt.com
  * Description: CMMS para gestión de historial de mantenimiento de maquinaria industrial — montacargas y equipos industriales.
- * Version:     2.0.0
+ * Version:     2.1.0
  * Author:      Santiago Camacho
  * Author URI:  https://santiagocamachomkt.com
  * Text Domain: cm-machine-history
@@ -13,7 +13,7 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'CMH_VERSION', '2.0.0' );
+define( 'CMH_VERSION', '2.1.0' );
 define( 'CMH_SLUG',    'cm-machine-history' );
 define( 'CMH_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'CMH_URL',     plugin_dir_url( __FILE__ ) );
@@ -28,6 +28,7 @@ require_once CMH_DIR . 'includes/class-cmh-client.php';
 require_once CMH_DIR . 'includes/class-cmh-schedule.php';
 require_once CMH_DIR . 'includes/class-cmh-charts.php';
 require_once CMH_DIR . 'includes/class-cmh-reports.php';
+require_once CMH_DIR . 'includes/class-cmh-time.php';
 
 register_activation_hook(   __FILE__, [ 'CMH_Core', 'activate' ] );
 register_deactivation_hook( __FILE__, [ 'CMH_Core', 'deactivate' ] );
@@ -41,6 +42,7 @@ CMH_Tech::init();
 CMH_Client::init();
 CMH_Schedule::init();
 CMH_Reports::init();
+CMH_Time::init();
 
 // ─── Auto-actualizaciones vía Plugin Update Checker ──────────────────────────
 // Requiere la librería en lib/plugin-update-checker/.
@@ -49,9 +51,16 @@ CMH_Reports::init();
 $cmh_puc = CMH_DIR . 'lib/plugin-update-checker/load-v5p7.php';
 if ( file_exists( $cmh_puc ) ) {
     require_once $cmh_puc;
-    \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+    $cmh_checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
         'https://github.com/Dsantycam/cm-machine-history/',
         __FILE__,
         'cm-machine-history'
     );
+
+    // Descargar el ZIP adjunto al release en vez del zipball del código fuente.
+    // Si algún release no trae ZIP adjunto, PUC cae al zipball automáticamente.
+    $cmh_api = $cmh_checker->getVcsApi();
+    if ( method_exists( $cmh_api, 'enableReleaseAssets' ) ) {
+        $cmh_api->enableReleaseAssets( '/^cm-machine-history.*\.zip$/i' );
+    }
 }
