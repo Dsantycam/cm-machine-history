@@ -81,29 +81,109 @@ class CMH_Forms {
             'paid_amount'    => [ 'label' => 'Monto abonado',          'req' => false, 'hint' => 'Opcional. El estado de pago se concilia solo.' ],
         ];
     }
-
-    /** Fuentes de dato disponibles para el autorrelleno del formulario. */
+    /**
+     * Fuentes de dato para el autorrelleno, agrupadas para el desplegable.
+     *
+     * Los datos de sucursal HEREDAN de la empresa: si la sucursal no tiene el
+     * dato lleno, se usa el de su empresa (decisión del usuario). Así se escribe
+     * una sola vez lo que se repite.
+     *
+     * Aparte de estas, existe la fuente `literal:` — un texto fijo que escribe
+     * el administrador y que no depende de ningún dato.
+     */
     public static function prefill_sources() {
         return [
-            'machine_code'            => 'Máquina — código',
-            'brand'                   => 'Máquina — marca',
-            'model'                   => 'Máquina — modelo',
-            'serial'                  => 'Máquina — serial',
-            'contact'                 => 'Máquina — contacto',
-            'current_hourmeter'       => 'Máquina — horómetro actual',
-            'scheduled_hours_monthly' => 'Máquina — horas programadas/mes',
-            'next_maintenance_date'   => 'Máquina — próximo mantenimiento',
-            'notes'                   => 'Máquina — notas',
-            'company_name'            => 'Empresa',
-            'city_name'               => 'Ciudad / Sucursal',
-            'user_name'               => 'Usuario que abre el formato',
-            'user_email'              => 'Correo del usuario que abre',
-            'today'                   => 'Fecha de hoy',
-            'task_title'              => 'Título de la tarea',
-            'task_notes'              => 'Notas de la tarea',
+            'Máquina' => [
+                'machine_code'            => 'Código',
+                'brand'                   => 'Marca',
+                'model'                   => 'Modelo',
+                'serial'                  => 'Serial',
+                'contact'                 => 'Contacto de la máquina',
+                'current_hourmeter'       => 'Horómetro actual',
+                'scheduled_hours_monthly' => 'Horas programadas / mes',
+                'next_maintenance_date'   => 'Próximo mantenimiento',
+                'maintenance_interval_days' => 'Recurrencia (días)',
+                'status'                  => 'Estado',
+                'notes'                   => 'Notas',
+            ],
+            'Empresa' => [
+                'company_name'           => 'Nombre',
+                'company_code'           => 'Código',
+                'company_contact_name'   => 'Encargado',
+                'company_contact_role'   => 'Cargo del encargado',
+                'company_contact_phone'  => 'Teléfono',
+                'company_contact_mobile' => 'Celular / WhatsApp',
+                'company_contact_email'  => 'Correo',
+                'company_contact2_name'  => 'Segundo contacto — nombre',
+                'company_contact2_phone' => 'Segundo contacto — teléfono',
+                'company_contact2_email' => 'Segundo contacto — correo',
+                'company_address'        => 'Dirección',
+                'company_area'           => 'Barrio / zona',
+                'company_access_notes'   => 'Notas de acceso',
+                'company_tax_id'         => 'NIT / identificación',
+                'company_legal_name'     => 'Razón social',
+                'company_billing_email'  => 'Correo de facturación',
+                'company_payment_terms'  => 'Condiciones de pago',
+            ],
+            'Ciudad / Sucursal (hereda de la empresa si está vacío)' => [
+                'city_name'           => 'Nombre',
+                'city_code'           => 'Código',
+                'city_contact_name'   => 'Encargado',
+                'city_contact_role'   => 'Cargo del encargado',
+                'city_contact_phone'  => 'Teléfono',
+                'city_contact_mobile' => 'Celular / WhatsApp',
+                'city_contact_email'  => 'Correo',
+                'city_contact2_name'  => 'Segundo contacto — nombre',
+                'city_contact2_phone' => 'Segundo contacto — teléfono',
+                'city_contact2_email' => 'Segundo contacto — correo',
+                'city_address'        => 'Dirección',
+                'city_area'           => 'Barrio / zona',
+                'city_access_notes'   => 'Notas de acceso',
+            ],
+            'Última intervención' => [
+                'last_hourmeter'         => 'Horómetro anterior',
+                'last_intervention_date' => 'Fecha',
+                'last_technician'        => 'Técnico que la atendió',
+                'last_maintenance_type'  => 'Tipo de mantenimiento',
+                'days_since_last'        => 'Días transcurridos',
+            ],
+            'Tarea y usuario' => [
+                'task_title'    => 'Título de la tarea',
+                'task_notes'    => 'Notas de la tarea',
+                'task_due_date' => 'Fecha de vencimiento de la tarea',
+                'user_name'     => 'Usuario que abre el formato',
+                'user_email'    => 'Correo del usuario que abre',
+                'today'         => 'Fecha de hoy',
+                'now_time'      => 'Hora actual',
+            ],
         ];
     }
 
+    /** Las mismas fuentes en lista plana, para validar lo que llega del formulario. */
+    public static function prefill_source_keys() {
+        $out = [];
+        foreach ( self::prefill_sources() as $group ) {
+            foreach ( $group as $k => $label ) $out[ $k ] = $label;
+        }
+        return $out;
+    }
+
+    /**
+     * Operadores del motor de reglas del tipo de mantenimiento.
+     * `unary` marca los que no necesitan valor de comparación.
+     */
+    public static function rule_operators() {
+        return [
+            'equals'      => [ 'label' => 'es igual a',      'unary' => false ],
+            'contains'    => [ 'label' => 'contiene',        'unary' => false ],
+            'starts_with' => [ 'label' => 'empieza por',     'unary' => false ],
+            'not_equals'  => [ 'label' => 'no es igual a',   'unary' => false ],
+            'filled'      => [ 'label' => 'no está vacío',   'unary' => true  ],
+            'empty'       => [ 'label' => 'está vacío',      'unary' => true  ],
+            'gt'          => [ 'label' => 'es mayor que',    'unary' => false ],
+            'lt'          => [ 'label' => 'es menor que',    'unary' => false ],
+        ];
+    }
     /** Tipos de mantenimiento que entiende el plugin. */
     public static function maintenance_types() {
         return [
@@ -130,6 +210,7 @@ class CMH_Forms {
             'type_field'       => '',
             'type_map'         => [],
             'system_map'       => [],
+            'type_rules'       => [],
             'prefill'          => [],
         ];
     }
@@ -158,7 +239,16 @@ class CMH_Forms {
                 'type_field' => '',
                 'type_map'   => [],
                 'system_map' => [],
-                'prefill'    => [],
+                // v2.2 — El prellenado se siembra desde el mismo mapeo de captura:
+                // el plugin ya sabía dónde va la máquina y el contacto, solo faltaba
+                // decírselo al autorrelleno. Editable desde la pantalla.
+                'prefill'    => [
+                    'text-14'  => 'machine_code',
+                    'text-12'  => 'contact',
+                    'date-1'   => 'today',
+                    'name-2'   => 'user_name',
+                    'number-1' => 'current_hourmeter',
+                ],
             ],
             225 => [
                 'enabled'          => 1,
@@ -178,7 +268,16 @@ class CMH_Forms {
                 'type_field' => '',
                 'type_map'   => [],
                 'system_map' => [],
-                'prefill'    => [],
+                // v2.2 — El prellenado se siembra desde el mismo mapeo de captura:
+                // el plugin ya sabía dónde va la máquina y el contacto, solo faltaba
+                // decírselo al autorrelleno. Editable desde la pantalla.
+                'prefill'    => [
+                    'text-14'  => 'machine_code',
+                    'text-12'  => 'contact',
+                    'date-1'   => 'today',
+                    'name-2'   => 'user_name',
+                    'number-1' => 'current_hourmeter',
+                ],
             ],
             226 => [
                 'enabled'          => 1,
@@ -208,7 +307,13 @@ class CMH_Forms {
                     'preventivo' => 'preventivo',
                 ],
                 'system_map' => [],
-                'prefill'    => [],
+                'prefill'    => [
+                    'text-6' => 'machine_code',
+                    'text-4' => 'contact',
+                    'date-1' => 'today',
+                    'name-2' => 'user_name',
+                    'text-5' => 'current_hourmeter',
+                ],
             ],
         ];
     }
@@ -248,9 +353,50 @@ class CMH_Forms {
         $c['type_map']         = is_array( $c['type_map'] )   ? $c['type_map']   : [];
         $c['system_map']       = is_array( $c['system_map'] ) ? $c['system_map'] : [];
         $c['prefill']          = is_array( $c['prefill'] )    ? $c['prefill']    : [];
+        $c['type_rules']       = is_array( $c['type_rules'] ) ? self::clean_rules( $c['type_rules'] ) : [];
         $c['maintenance_type'] = isset( self::maintenance_types()[ $c['maintenance_type'] ] )
             ? $c['maintenance_type'] : 'preventivo';
+
+        // v2.2 — Migración: lo que hasta la v2.1 era «un campo + tabla de valores»
+        // pasa a ser la primera tanda de reglas, con el operador «es igual a».
+        // Se conserva el orden, que era y sigue siendo la prioridad.
+        // Ocurre al LEER, así que las configuraciones guardadas antes de la v2.2
+        // siguen funcionando sin tocarlas. Al guardar desde la pantalla nueva, las
+        // reglas pasan a ser la única fuente y el mapa viejo deja de usarse.
+        if ( ! $c['type_rules'] && ! empty( $c['type_field'] ) && $c['type_map'] ) {
+            foreach ( $c['type_map'] as $value => $type ) {
+                if ( ! isset( self::maintenance_types()[ $type ] ) ) continue;
+                $c['type_rules'][] = [
+                    'field' => $c['type_field'],
+                    'op'    => 'equals',
+                    'value' => (string) $value,
+                    'type'  => $type,
+                ];
+            }
+        }
         return $c;
+    }
+
+    /** Descarta reglas incompletas o con operador/tipo desconocido. */
+    private static function clean_rules( $rules ) {
+        $ops  = self::rule_operators();
+        $type = self::maintenance_types();
+        $out  = [];
+        foreach ( (array) $rules as $r ) {
+            if ( ! is_array( $r ) ) continue;
+            $field = self::clean_slug( $r['field'] ?? '' );
+            $op    = (string) ( $r['op'] ?? '' );
+            $to    = (string) ( $r['type'] ?? '' );
+            if ( $field === '' || ! isset( $ops[ $op ] ) || ! isset( $type[ $to ] ) ) continue;
+
+            $value = (string) ( $r['value'] ?? '' );
+            // Un operador que compara necesita contra qué comparar.
+            if ( ! $ops[ $op ]['unary'] && $value === '' ) continue;
+            if ( $ops[ $op ]['unary'] ) $value = '';
+
+            $out[] = [ 'field' => $field, 'op' => $op, 'value' => $value, 'type' => $to ];
+        }
+        return $out;
     }
 
     /** Guarda (o reemplaza) la configuración de un formato. */
@@ -433,6 +579,10 @@ class CMH_Forms {
         $used = array_filter( (array) $cfg['fields'] );
         if ( ! empty( $cfg['type_field'] ) ) $used['type_field'] = $cfg['type_field'];
         foreach ( array_keys( (array) $cfg['prefill'] ) as $slug ) $used[ 'prefill:' . $slug ] = $slug;
+        // v2.2 — Los campos que usan las reglas del tipo también pueden romperse.
+        foreach ( (array) $cfg['type_rules'] as $i => $r ) {
+            if ( ! empty( $r['field'] ) ) $used[ 'regla ' . ( $i + 1 ) ] = $r['field'];
+        }
 
         $broken = [];
         foreach ( $used as $target => $slug ) {
@@ -457,15 +607,42 @@ class CMH_Forms {
         $machine_code = strtoupper( trim( (string) $machine_code ) );
         if ( $machine_code === '' ) return [];
 
+        $ctx = self::prefill_context( $machine_code, $task_id );
+        if ( ! $ctx ) return [];
+
+        $out = [];
+        foreach ( self::enabled() as $form_id => $cfg ) {
+            $map = [];
+            foreach ( (array) $cfg['prefill'] as $slug => $source ) {
+                $v = self::prefill_value( $source, $ctx );
+                if ( $v !== '' ) $map[ $slug ] = $v;
+            }
+            if ( $map ) $out[ $form_id ] = $map;
+        }
+        return $out;
+    }
+
+    /**
+     * Reúne de una sola vez todo lo que las fuentes pueden necesitar: la máquina
+     * con su empresa y su sucursal completas, la última intervención, la tarea y
+     * el usuario. Cinco consultas fijas, no una por fuente.
+     */
+    private static function prefill_context( $machine_code, $task_id = 0 ) {
         global $wpdb; $t = CMH_Core::tables();
+
         $machine = $wpdb->get_row( $wpdb->prepare(
-            "SELECT m.*, c.name company_name, ci.name city_name
-             FROM {$t['machines']} m
-             JOIN {$t['companies']} c  ON c.id=m.company_id
-             JOIN {$t['cities']}    ci ON ci.id=m.city_id
-             WHERE m.machine_code=%s", $machine_code
+            "SELECT * FROM {$t['machines']} WHERE machine_code=%s", $machine_code
         ) );
-        if ( ! $machine ) return [];
+        if ( ! $machine ) return null;
+
+        $company = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM {$t['companies']} WHERE id=%d", (int) $machine->company_id ) );
+        $city    = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM {$t['cities']} WHERE id=%d", (int) $machine->city_id ) );
+
+        $last = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM {$t['interventions']} WHERE machine_id=%d
+             ORDER BY intervention_date DESC, id DESC LIMIT 1", (int) $machine->id ) );
 
         $task = null;
         if ( $task_id ) {
@@ -474,40 +651,137 @@ class CMH_Forms {
             if ( $task && (int) $task->machine_id !== (int) $machine->id ) $task = null;
         }
 
-        $user = is_user_logged_in() ? wp_get_current_user() : null;
-
-        $out = [];
-        foreach ( self::enabled() as $form_id => $cfg ) {
-            $map = [];
-            foreach ( (array) $cfg['prefill'] as $slug => $source ) {
-                $v = self::prefill_value( $source, $machine, $task, $user );
-                if ( $v !== '' ) $map[ $slug ] = $v;
-            }
-            if ( $map ) $out[ $form_id ] = $map;
-        }
-        return $out;
+        return [
+            'machine' => $machine,
+            'company' => $company,
+            'city'    => $city,
+            'last'    => $last,
+            'task'    => $task,
+            'user'    => is_user_logged_in() ? wp_get_current_user() : null,
+        ];
     }
 
-    private static function prefill_value( $source, $machine, $task, $user ) {
+    /** Lee una columna de una fila que puede no existir o venir en NULL. */
+    private static function col( $row, $field ) {
+        return ( $row && isset( $row->$field ) && $row->$field !== null ) ? (string) $row->$field : '';
+    }
+
+    /**
+     * Dato de sucursal con herencia: si la sucursal lo tiene vacío, se usa el de
+     * la empresa (decisión del usuario). El nombre y el código NO heredan, porque
+     * la sucursal siempre tiene los suyos y heredarlos confundiría.
+     */
+    private static function city_col( $ctx, $field ) {
+        $v = self::col( $ctx['city'], $field );
+        if ( $v !== '' ) return $v;
+        return self::col( $ctx['company'], $field );
+    }
+
+    private static function prefill_value( $source, $ctx ) {
+        $source = (string) $source;
+
+        // Texto fijo escrito por el administrador: no depende de ningún dato.
+        if ( strpos( $source, 'literal:' ) === 0 ) return substr( $source, 8 );
+
+        $m    = $ctx['machine'];
+        $task = $ctx['task'];
+        $user = $ctx['user'];
+        $last = $ctx['last'];
+
         switch ( $source ) {
-            case 'machine_code':            return (string) $machine->machine_code;
-            case 'brand':                   return (string) $machine->brand;
-            case 'model':                   return (string) $machine->model;
-            case 'serial':                  return (string) $machine->serial;
-            case 'contact':                 return (string) $machine->contact;
-            case 'current_hourmeter':       return (string) ( 0 + $machine->current_hourmeter );
-            case 'scheduled_hours_monthly': return (string) ( 0 + $machine->scheduled_hours_monthly );
-            case 'next_maintenance_date':   return (string) ( $machine->next_maintenance_date ?: '' );
-            case 'notes':                   return (string) $machine->notes;
-            case 'company_name':            return (string) $machine->company_name;
-            case 'city_name':               return (string) $machine->city_name;
-            case 'user_name':               return $user ? (string) $user->display_name : '';
-            case 'user_email':              return $user ? (string) $user->user_email : '';
-            case 'today':                   return current_time( 'Y-m-d' );
-            case 'task_title':              return $task ? (string) $task->title : '';
-            case 'task_notes':              return $task ? (string) $task->notes : '';
+            // -- Máquina ------------------------------------------------------
+            case 'machine_code':              return self::col( $m, 'machine_code' );
+            case 'brand':                     return self::col( $m, 'brand' );
+            case 'model':                     return self::col( $m, 'model' );
+            case 'serial':                    return self::col( $m, 'serial' );
+            case 'contact':                   return self::col( $m, 'contact' );
+            case 'current_hourmeter':         return (string) ( 0 + $m->current_hourmeter );
+            case 'scheduled_hours_monthly':   return (string) ( 0 + $m->scheduled_hours_monthly );
+            case 'next_maintenance_date':     return self::col( $m, 'next_maintenance_date' );
+            case 'maintenance_interval_days': return self::col( $m, 'maintenance_interval_days' );
+            case 'status':                    return self::col( $m, 'status' );
+            case 'notes':                     return self::col( $m, 'notes' );
+
+            // -- Empresa ------------------------------------------------------
+            case 'company_name':           return self::col( $ctx['company'], 'name' );
+            case 'company_code':           return self::col( $ctx['company'], 'code' );
+            case 'company_contact_name':   return self::col( $ctx['company'], 'contact_name' );
+            case 'company_contact_role':   return self::col( $ctx['company'], 'contact_role' );
+            case 'company_contact_phone':  return self::col( $ctx['company'], 'contact_phone' );
+            case 'company_contact_mobile': return self::col( $ctx['company'], 'contact_mobile' );
+            case 'company_contact_email':  return self::col( $ctx['company'], 'contact_email' );
+            case 'company_contact2_name':  return self::col( $ctx['company'], 'contact2_name' );
+            case 'company_contact2_phone': return self::col( $ctx['company'], 'contact2_phone' );
+            case 'company_contact2_email': return self::col( $ctx['company'], 'contact2_email' );
+            case 'company_address':        return self::col( $ctx['company'], 'address' );
+            case 'company_area':           return self::col( $ctx['company'], 'area' );
+            case 'company_access_notes':   return self::col( $ctx['company'], 'access_notes' );
+            case 'company_tax_id':         return self::col( $ctx['company'], 'tax_id' );
+            case 'company_legal_name':     return self::col( $ctx['company'], 'legal_name' );
+            case 'company_billing_email':  return self::col( $ctx['company'], 'billing_email' );
+            case 'company_payment_terms':  return self::col( $ctx['company'], 'payment_terms' );
+
+            // -- Sucursal (hereda de la empresa si está vacío) -----------------
+            case 'city_name':           return self::col( $ctx['city'], 'name' );
+            case 'city_code':           return self::col( $ctx['city'], 'code' );
+            case 'city_contact_name':   return self::city_col( $ctx, 'contact_name' );
+            case 'city_contact_role':   return self::city_col( $ctx, 'contact_role' );
+            case 'city_contact_phone':  return self::city_col( $ctx, 'contact_phone' );
+            case 'city_contact_mobile': return self::city_col( $ctx, 'contact_mobile' );
+            case 'city_contact_email':  return self::city_col( $ctx, 'contact_email' );
+            case 'city_contact2_name':  return self::city_col( $ctx, 'contact2_name' );
+            case 'city_contact2_phone': return self::city_col( $ctx, 'contact2_phone' );
+            case 'city_contact2_email': return self::city_col( $ctx, 'contact2_email' );
+            case 'city_address':        return self::city_col( $ctx, 'address' );
+            case 'city_area':           return self::city_col( $ctx, 'area' );
+            case 'city_access_notes':   return self::city_col( $ctx, 'access_notes' );
+
+            // -- Última intervención ------------------------------------------
+            case 'last_hourmeter':         return $last ? (string) ( 0 + $last->hourmeter ) : '';
+            case 'last_intervention_date': return self::col( $last, 'intervention_date' );
+            case 'last_technician':        return self::col( $last, 'technician' );
+            case 'last_maintenance_type':  return self::col( $last, 'maintenance_type' );
+            case 'days_since_last':
+                $d = self::col( $last, 'intervention_date' );
+                if ( ! $d ) return '';
+                $diff = floor( ( strtotime( current_time( 'Y-m-d' ) ) - strtotime( $d ) ) / DAY_IN_SECONDS );
+                return (string) max( 0, (int) $diff );
+
+            // -- Tarea y usuario ----------------------------------------------
+            case 'task_title':    return self::col( $task, 'title' );
+            case 'task_notes':    return self::col( $task, 'notes' );
+            case 'task_due_date': return self::col( $task, 'due_date' );
+            case 'user_name':     return $user ? (string) $user->display_name : '';
+            case 'user_email':    return $user ? (string) $user->user_email : '';
+            case 'today':         return current_time( 'Y-m-d' );
+            case 'now_time':      return current_time( 'H:i' );
         }
         return '';
+    }
+
+    /**
+     * Propone un prellenado a partir de lo que el formato ya sabe capturar.
+     * Es lo que faltaba en la v2.1: el plugin conocía el mapeo de captura pero
+     * nunca lo copiaba al de prellenado, así que el autorrelleno nacía vacío.
+     */
+    public static function suggest_prefill( $cfg ) {
+        $cfg = self::normalize( $cfg );
+
+        // Destino de captura -> fuente equivalente para prellenar.
+        $pairs = [
+            'machine'    => 'machine_code',
+            'contact'    => 'contact',
+            'date'       => 'today',
+            'technician' => 'user_name',
+            'hourmeter'  => 'current_hourmeter',
+        ];
+
+        $out = [];
+        foreach ( $pairs as $target => $source ) {
+            $slug = $cfg['fields'][ $target ] ?? '';
+            if ( $slug !== '' ) $out[ $slug ] = $source;
+        }
+        return $out;
     }
 
     // =========================================================================
@@ -691,13 +965,15 @@ class CMH_Forms {
         }
         echo '</tbody></table></div>';
 
-        // ── Tipo de mantenimiento por valor ───────────────────────────────────
-        echo '<div class="cmh-panel"><h2>Tipo de mantenimiento según lo que marque el técnico</h2>'
-            . '<p style="font-size:12px;color:#646970;margin:-8px 0 12px">Si el formulario tiene un checkbox, radio o lista que decide el tipo, indícalo aquí y traduce sus valores. '
-            . 'El orden importa: gana la primera coincidencia. Marcar «avería» descuenta disponibilidad automáticamente.</p>'
-            . '<label>Campo que decide el tipo' . self::field_input( 'type_field', $cfg['type_field'], $fields, false ) . '</label>';
-        self::map_rows( 'type_map', $cfg['type_map'], self::maintenance_types(), 'Valor en el formulario', 'Tipo del plugin' );
-        echo '</div>';
+        // ── Reglas del tipo de mantenimiento ─────────────────────────────────
+        echo '<div class="cmh-panel"><h2>Reglas del tipo de mantenimiento</h2>'
+            . '<p style="font-size:12px;color:#646970;margin:-8px 0 12px">Se evalúan <strong>de arriba abajo y gana la primera que se cumpla</strong>. '
+            . 'Si ninguna se cumple, queda el tipo por defecto del formato («' . esc_html( self::maintenance_types()[ $cfg['maintenance_type'] ] ?? '—' ) . '», arriba). '
+            . 'Marcar «avería» descuenta disponibilidad automáticamente.</p>';
+        self::rule_rows( $cfg['type_rules'], $fields );
+        echo '<p style="font-size:12px;color:#646970;margin:10px 0 0">Los operadores <em>está vacío</em> y <em>no está vacío</em> ignoran la columna del valor. '
+            . '<em>Es mayor que</em> y <em>es menor que</em> comparan números: sirven, por ejemplo, para marcar avería cuando las horas de parada superan cero.</p>'
+            . '</div>';
 
         // ── Sistema / falla ───────────────────────────────────────────────────
         echo '<div class="cmh-panel"><h2>Traducción del sistema / falla</h2>'
@@ -709,11 +985,14 @@ class CMH_Forms {
         // ── Autorrelleno ──────────────────────────────────────────────────────
         echo '<div class="cmh-panel"><h2>Qué llega prellenado</h2>'
             . '<p style="font-size:12px;color:#646970;margin:-8px 0 12px">Cuando el formato se abre desde una tarea o desde la ficha de la máquina, estos campos llegan llenos. '
-            . 'Elige exactamente qué campo recibe qué dato: nada se adivina.</p>';
+            . 'Elige exactamente qué campo recibe qué dato: nada se adivina. Los datos de sucursal que estén vacíos heredan los de la empresa.</p>';
         self::prefill_rows( $cfg['prefill'], $fields );
-        echo '</div>';
+        echo '<p style="font-size:12px;color:#646970;margin:10px 0 0">¿Prefieres empezar de una base? '
+            . 'El botón <strong>Sugerir prellenado</strong> (abajo, junto a Guardar) rellena la tabla a partir del mapeo de captura que ya definiste arriba, sin pisar lo que hayas puesto.</p>'
+            . '</div>';
 
         echo '<p><button class="button button-primary">Guardar mapeo</button> '
+            . '<button class="button" name="suggest_prefill" value="1">Sugerir prellenado</button> '
             . '<a class="button" href="' . esc_url( $back ) . '">Volver</a></p></form>';
 
         echo '</div><div class="cmh-side">';
@@ -785,18 +1064,81 @@ class CMH_Forms {
     }
 
     /** Filas «campo del formulario → fuente de dato» para el autorrelleno. */
+    /**
+     * Tabla de reglas del tipo de mantenimiento. Se evalúan de arriba abajo y
+     * gana la primera que se cumpla; si ninguna lo hace, aplica el tipo por
+     * defecto del formato.
+     */
+    private static function rule_rows( $current, $fields ) {
+        $rows = [];
+        foreach ( (array) $current as $r ) $rows[] = $r;
+        for ( $i = 0; $i < 3; $i++ ) $rows[] = [ 'field' => '', 'op' => 'equals', 'value' => '', 'type' => '' ];
+
+        echo '<table class="widefat cmh"><thead><tr>'
+            . '<th style="width:34px">#</th><th>Si el campo…</th><th style="width:150px">…cumple que…</th>'
+            . '<th style="width:200px">…este valor</th><th style="width:150px">entonces el tipo es</th>'
+            . '</tr></thead><tbody>';
+
+        foreach ( $rows as $i => $r ) {
+            $field = $r['field'] ?? '';
+            $op    = $r['op']    ?? 'equals';
+            $value = $r['value'] ?? '';
+            $type  = $r['type']  ?? '';
+
+            echo '<tr><td style="color:#646970">' . ( $i + 1 ) . '</td>'
+                . '<td>' . self::field_input( 'rules[' . $i . '][field]', $field, $fields ) . '</td>'
+                . '<td><select name="rules[' . $i . '][op]" class="cmh-rule-op">';
+            foreach ( self::rule_operators() as $ok => $ov )
+                echo '<option value="' . esc_attr( $ok ) . '" data-unary="' . ( $ov['unary'] ? '1' : '0' ) . '" '
+                    . selected( $op, $ok, false ) . '>' . esc_html( $ov['label'] ) . '</option>';
+            echo '</select></td>'
+                . '<td><input type="text" name="rules[' . $i . '][value]" value="' . esc_attr( $value ) . '" '
+                . 'class="cmh-rule-value" placeholder="valor a comparar" style="width:100%"></td>'
+                . '<td><select name="rules[' . $i . '][type]"><option value="">— Ninguno —</option>';
+            foreach ( self::maintenance_types() as $tk => $tv )
+                echo '<option value="' . esc_attr( $tk ) . '" ' . selected( $type, $tk, false ) . '>' . esc_html( $tv ) . '</option>';
+            echo '</select></td></tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    /**
+     * Tabla de autorrelleno. Cada fila dice qué campo del formulario recibe qué
+     * dato. La fuente «Texto fijo» habilita el cuadro de la derecha para escribir
+     * un valor que no depende de ningún dato.
+     */
     private static function prefill_rows( $current, $fields ) {
         $rows = [];
-        foreach ( (array) $current as $slug => $source ) $rows[] = [ $slug, $source ];
-        for ( $i = 0; $i < 4; $i++ ) $rows[] = [ '', '' ];
+        foreach ( (array) $current as $slug => $source ) {
+            $literal = strpos( (string) $source, 'literal:' ) === 0;
+            $rows[]  = [
+                'slug'   => $slug,
+                'source' => $literal ? 'literal' : $source,
+                'text'   => $literal ? substr( $source, 8 ) : '',
+            ];
+        }
+        for ( $i = 0; $i < 5; $i++ ) $rows[] = [ 'slug' => '', 'source' => '', 'text' => '' ];
 
-        echo '<table class="widefat cmh"><thead><tr><th style="width:50%">Campo del formulario</th><th>Se llena con</th></tr></thead><tbody>';
+        echo '<table class="widefat cmh"><thead><tr>'
+            . '<th style="width:40%">Campo del formulario</th><th>Se llena con</th>'
+            . '<th style="width:26%">Texto fijo</th></tr></thead><tbody>';
+
         foreach ( $rows as $i => $row ) {
-            echo '<tr><td>' . self::field_input( 'prefill[' . $i . '][k]', $row[0], $fields ) . '</td>'
-                . '<td><select name="prefill[' . $i . '][v]"><option value="">— Nada —</option>';
-            foreach ( self::prefill_sources() as $sk => $sv )
-                echo '<option value="' . esc_attr( $sk ) . '" ' . selected( $row[1], $sk, false ) . '>' . esc_html( $sv ) . '</option>';
-            echo '</select></td></tr>';
+            echo '<tr><td>' . self::field_input( 'prefill[' . $i . '][k]', $row['slug'], $fields ) . '</td>'
+                . '<td><select name="prefill[' . $i . '][v]" class="cmh-prefill-source"><option value="">— Nada —</option>';
+
+            foreach ( self::prefill_sources() as $group => $items ) {
+                echo '<optgroup label="' . esc_attr( $group ) . '">';
+                foreach ( $items as $sk => $sv )
+                    echo '<option value="' . esc_attr( $sk ) . '" ' . selected( $row['source'], $sk, false ) . '>' . esc_html( $sv ) . '</option>';
+                echo '</optgroup>';
+            }
+            echo '<optgroup label="Otro">'
+                . '<option value="literal" ' . selected( $row['source'], 'literal', false ) . '>Texto fijo que escribo aquí →</option>'
+                . '</optgroup></select></td>'
+                . '<td><input type="text" name="prefill[' . $i . '][t]" value="' . esc_attr( $row['text'] ) . '" '
+                . 'class="cmh-prefill-literal" placeholder="solo si eliges «Texto fijo»" style="width:100%"></td>'
+                . '</tr>';
         }
         echo '</tbody></table>';
     }
@@ -857,8 +1199,10 @@ class CMH_Forms {
             }
             $names = self::forminator_forms();
             $cfg   = self::blank();
-            $cfg['label']  = $names[ $form_id ] ?? ( 'Formulario ' . $form_id );
-            $cfg['fields'] = self::suggest_mapping( $form_id );
+            $cfg['label']   = $names[ $form_id ] ?? ( 'Formulario ' . $form_id );
+            $cfg['fields']  = self::suggest_mapping( $form_id );
+            // v2.2 — El prellenado nace propuesto desde el mapeo de captura, no vacío.
+            $cfg['prefill'] = self::suggest_prefill( $cfg );
             self::save( $form_id, $cfg );
             CMH_Admin::redirect_to( CMH_Admin::admin_url( CMH_SLUG . '-forms', [ 'form' => $form_id ] ), 'Formato vinculado. Revisa el mapeo antes de usarlo.' );
         }
@@ -869,29 +1213,77 @@ class CMH_Forms {
         $cfg['form_type']        = sanitize_key( $_POST['form_type'] ?? '' ) ?: 'formato';
         $cfg['maintenance_type'] = sanitize_key( $_POST['maintenance_type'] ?? 'preventivo' );
         $cfg['page_url']         = esc_url_raw( trim( $_POST['page_url'] ?? '' ) );
-        $cfg['type_field']       = self::clean_slug( $_POST['type_field'] ?? '' );
 
         foreach ( array_keys( self::capture_targets() ) as $key ) {
             $slug = self::clean_slug( $_POST['fields'][ $key ] ?? '' );
             if ( $slug !== '' ) $cfg['fields'][ $key ] = $slug;
         }
 
-        $cfg['type_map']   = self::collect_map( $_POST['type_map'] ?? [], array_keys( self::maintenance_types() ) );
         $cfg['system_map'] = self::collect_map( $_POST['system_map'] ?? [], array_keys( CMH_Admin::failure_systems() ) );
+        $cfg['type_rules'] = self::collect_rules( $_POST['rules'] ?? [] );
+        $cfg['prefill']    = self::collect_prefill( $_POST['prefill'] ?? [] );
 
-        foreach ( (array) ( $_POST['prefill'] ?? [] ) as $row ) {
-            $slug   = self::clean_slug( $row['k'] ?? '' );
-            $source = sanitize_key( $row['v'] ?? '' );
-            if ( $slug !== '' && isset( self::prefill_sources()[ $source ] ) ) $cfg['prefill'][ $slug ] = $source;
+        // v2.2 — «Sugerir prellenado» completa lo que falte sin pisar lo puesto.
+        $suggested = 0;
+        if ( ! empty( $_POST['suggest_prefill'] ) ) {
+            foreach ( self::suggest_prefill( $cfg ) as $slug => $source ) {
+                if ( ! isset( $cfg['prefill'][ $slug ] ) ) { $cfg['prefill'][ $slug ] = $source; $suggested++; }
+            }
         }
 
         $warn = empty( $cfg['fields']['machine'] )
             ? 'Ojo: sin campo de máquina los envíos de este formato no se pueden registrar.' : '';
 
+        $msg = 'Mapeo guardado.';
+        if ( ! empty( $_POST['suggest_prefill'] ) ) {
+            $msg = $suggested
+                ? sprintf( 'Mapeo guardado y %d campo(s) de prellenado propuestos. Revísalos.', $suggested )
+                : 'Mapeo guardado. No había nada nuevo que proponer: el prellenado ya cubre lo que el formato sabe capturar.';
+        }
+
         self::save( $form_id, $cfg );
-        CMH_Admin::redirect_to( CMH_Admin::admin_url( CMH_SLUG . '-forms', [ 'form' => $form_id ] ), 'Mapeo guardado.', $warn );
+        CMH_Admin::redirect_to( CMH_Admin::admin_url( CMH_SLUG . '-forms', [ 'form' => $form_id ] ), $msg, $warn );
     }
 
+    /** Reglas del tipo de mantenimiento tal como llegan del formulario. */
+    private static function collect_rules( $rows ) {
+        $out = [];
+        foreach ( (array) $rows as $r ) {
+            if ( ! is_array( $r ) ) continue;
+            $out[] = [
+                'field' => self::clean_slug( $r['field'] ?? '' ),
+                'op'    => sanitize_key( $r['op'] ?? '' ),
+                'value' => sanitize_text_field( $r['value'] ?? '' ),
+                'type'  => sanitize_key( $r['type'] ?? '' ),
+            ];
+        }
+        // clean_rules descarta las filas incompletas y valida operador y tipo.
+        return self::clean_rules( $out );
+    }
+
+    /**
+     * Autorrelleno tal como llega del formulario. La fuente «literal» se guarda
+     * como `literal:<texto>`, que es como la lee prefill_value().
+     */
+    private static function collect_prefill( $rows ) {
+        $valid = self::prefill_source_keys();
+        $out   = [];
+        foreach ( (array) $rows as $row ) {
+            if ( ! is_array( $row ) ) continue;
+            $slug   = self::clean_slug( $row['k'] ?? '' );
+            $source = sanitize_key( $row['v'] ?? '' );
+            if ( $slug === '' || $source === '' ) continue;
+
+            if ( $source === 'literal' ) {
+                $text = sanitize_text_field( $row['t'] ?? '' );
+                if ( $text === '' ) continue;   // texto fijo sin texto no sirve de nada
+                $out[ $slug ] = 'literal:' . $text;
+                continue;
+            }
+            if ( isset( $valid[ $source ] ) ) $out[ $slug ] = $source;
+        }
+        return $out;
+    }
     /** Filas [k,v] del POST → mapa limpio, conservando el orden (que es prioridad). */
     private static function collect_map( $rows, $valid_values ) {
         $out = [];
