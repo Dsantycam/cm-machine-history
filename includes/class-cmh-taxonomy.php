@@ -17,10 +17,17 @@
  * ESTADOS DE PAGO. Son etapas del proceso de cobro —pendiente de cotización, de
  * orden de compra, de formato…—, no formas de pago. El dinero se sigue calculando
  * igual que siempre, costo menos abonado; el estado solo cuenta en qué punto del
- * proceso está. Tres comportamientos:
- *   · pendiente → el saldo sigue contando en «Por cobrar» (el de casi todos).
- *   · pagado    → al guardar, lo abonado se iguala al costo.
- *   · anulado   → el saldo deja de contar en «Por cobrar», sin tocar lo abonado.
+ * proceso está. Cuatro comportamientos:
+ *   · pendiente  → el saldo sigue contando en «Por cobrar» (el de casi todos).
+ *   · pagado     → al guardar, lo abonado se iguala al costo.
+ *   · anulado    → el saldo deja de contar en «Por cobrar», sin tocar lo abonado.
+ *   · en trámite → cotizado, todavía sin aprobar. Sale de «Por cobrar» y suma en
+ *                  su propio indicador: una cotización no es una deuda, pero
+ *                  tampoco es algo anulado, y esconderla dejaría plata sin ver.
+ *   · no contab. → no entra en NINGÚN indicador de dinero, ni siquiera en el
+ *                  costo total. Para lo que no es plata: garantías, cortesías,
+ *                  trabajo interno. La intervención se registra igual y su
+ *                  historial técnico —horas, parada, disponibilidad— no cambia.
  *
  * Las claves internas nunca se renumeran ni se reutilizan: si se borra un estado
  * que ya está en uso, las intervenciones que lo tenían lo conservan y se muestran
@@ -47,7 +54,9 @@ class CMH_Taxonomy {
     const MONEY_MODES = [
         'pending' => 'Sigue por cobrar',
         'paid'    => 'Cobrado (iguala lo abonado al costo)',
+        'quote'   => 'En trámite (cotizado, todavía no se cobra)',
         'void'    => 'Anulado (deja de contar en Por cobrar)',
+        'ignore'  => 'No contabilizar (no entra en ningún indicador de dinero)',
     ];
 
     // =========================================================================
@@ -135,40 +144,102 @@ class CMH_Taxonomy {
         return $all[ strtolower( (string) $slug ) ]['money'] ?? 'pending';
     }
 
-    /** Claves de los estados anulados: su saldo no cuenta en «Por cobrar». */
-    public static function void_pstates() {
+    /** Claves de los estados que se comportan de una manera dada frente al dinero. */
+    public static function pstates_by_money( $mode ) {
         $out = [];
-        foreach ( self::pstates() as $slug => $cfg ) if ( $cfg['money'] === 'void' ) $out[] = $slug;
+        foreach ( self::pstates() as $slug => $cfg ) if ( ( $cfg['money'] ?? 'pending' ) === $mode ) $out[] = $slug;
         return $out;
     }
 
+    /** Claves de los estados anulados: su saldo no cuenta en «Por cobrar». */
+    public static function void_pstates() { return self::pstates_by_money( 'void' ); }
+
+    /** Claves de lo cotizado: tampoco cuenta en «Por cobrar», pero no está anulado. */
+    public static function quote_pstates() { return self::pstates_by_money( 'quote' ); }
+
+    /** Claves de lo que no se contabiliza en absoluto: ni siquiera como costo. */
+    public static function ignore_pstates() { return self::pstates_by_money( 'ignore' ); }
+
     /**
-     * Fragmento SQL que excluye los estados anulados de una suma de saldo.
-     * Devuelve '' si no hay ninguno, para no ensuciar la consulta.
+     * Todo lo que NO es un cobro en firme: lo anulado, lo que sigue en trámite y
+     * lo que no se contabiliza. Es la lista que «Por cobrar» deja fuera.
+     */
+    public static function unbilled_pstates() {
+        return array_merge( self::void_pstates(), self::quote_pstates(), self::ignore_pstates() );
+    }
+
+    /** Lista de claves lista para un IN (…) de SQL. */
+    private static function states_in_list( $states ) {
+        return implode( ',', array_map( function ( $s ) {
+            return "'" . esc_sql( $s ) . "'";
+        }, $states ) );
+    }
+
+    /**
+     * Fragmento SQL que excluye unos estados de una suma de saldo.
+     * Devuelve '' si la lista está vacía, para no ensuciar la consulta.
+     */
+    private static function not_in_states_sql( $states, $alias ) {
+        if ( ! $states ) return '';
+        return " AND ( {$alias}payment_status IS NULL OR {$alias}payment_status NOT IN ("
+            . self::states_in_list( $states ) . ') )';
+    }
+
+    /**
+     * Excluye solo los estados anulados.
      *
      * @param string $alias Prefijo de la tabla de intervenciones ('i.' o '').
      */
     public static function not_void_sql( $alias = '' ) {
-        $void = self::void_pstates();
-        if ( ! $void ) return '';
-        $list = implode( ',', array_map( function ( $s ) {
-            return "'" . esc_sql( $s ) . "'";
-        }, $void ) );
-        return " AND ( {$alias}payment_status IS NULL OR {$alias}payment_status NOT IN ($list) )";
+        return self::not_in_states_sql( self::void_pstates(), $alias );
     }
 
+    /** Excluye todo lo que no es un cobro en firme: anulado y en trámite. */
+    public static function not_billable_sql( $alias = '' ) {
+        return self::not_in_states_sql( self::unbilled_pstates(), $alias );
+    }
 
     /**
-     * Suma del saldo por cobrar, excluyendo los estados anulados.
-     * Un único sitio para que el KPI de la ficha, el dashboard y los reportes no
-     * puedan divergir.
+     * Suma del saldo por cobrar, dejando fuera lo anulado y lo que sigue en
+     * trámite. Un único sitio para que el KPI de la ficha, el dashboard y los
+     * reportes no puedan divergir.
      *
      * @param string $alias Prefijo de la tabla de intervenciones ('i.' o '').
      */
     public static function balance_sum_sql( $alias = '' ) {
         $a = $alias;
-        return "COALESCE(SUM(CASE WHEN {$a}cost>{$a}paid_amount" . self::not_void_sql( $a )
+        return "COALESCE(SUM(CASE WHEN {$a}cost>{$a}paid_amount" . self::not_billable_sql( $a )
             . " THEN {$a}cost-{$a}paid_amount ELSE 0 END),0)";
+    }
+
+    /**
+     * Suma de una columna de dinero (costo, abonado…) dejando fuera lo que el
+     * usuario marcó como «no contabilizar». Sin estados así devuelve la suma de
+     * siempre, para no meter un CASE en cada consulta sin necesidad.
+     *
+     * @param string $column Columna a sumar: 'cost', 'paid_amount'.
+     * @param string $alias  Prefijo de la tabla de intervenciones ('i.' o '').
+     */
+    public static function money_sum_sql( $column, $alias = '' ) {
+        $a      = $alias;
+        $ignore = self::ignore_pstates();
+        if ( ! $ignore ) return "COALESCE(SUM({$a}{$column}),0)";
+
+        return "COALESCE(SUM(CASE WHEN ( {$a}payment_status IS NULL OR {$a}payment_status NOT IN ("
+            . self::states_in_list( $ignore ) . ") ) THEN {$a}{$column} ELSE 0 END),0)";
+    }
+
+    /**
+     * Suma de lo cotizado que todavía no es un cobro: el indicador «En trámite».
+     * Sin estados en trámite devuelve un 0 literal, para que la consulta siga
+     * teniendo la misma forma y la columna exista siempre.
+     */
+    public static function quote_sum_sql( $alias = '' ) {
+        $quotes = self::quote_pstates();
+        if ( ! $quotes ) return '0';
+        $a = $alias;
+        return "COALESCE(SUM(CASE WHEN {$a}payment_status IN (" . self::states_in_list( $quotes ) . ")"
+            . " AND {$a}cost>{$a}paid_amount THEN {$a}cost-{$a}paid_amount ELSE 0 END),0)";
     }
     public static function pstate_badge( $slug ) {
         return self::badge( self::pstate_label( $slug ), self::pstates()[ strtolower( (string) $slug ) ]['color'] ?? 'gray' );
@@ -246,8 +317,8 @@ class CMH_Taxonomy {
                     'column' => 'payment_status',
                     'head'   => 'Frente al dinero',
                     'ph'     => 'Pendiente de cotización…',
-                    'intro'  => 'Son las etapas del proceso de cobro —pendiente de cotización, de orden de compra, de formato…—. El dinero se sigue calculando como costo menos abonado; la etapa solo dice en qué punto va. Marca «Anulado» solo en lo que ya no se piensa cobrar.',
-                    'foot'   => 'La clave interna no cambia aunque renombres la etapa, así que no se pierde nada de lo ya guardado.',
+                    'intro'  => 'Son las etapas del proceso de cobro —pendiente de cotización, de orden de compra, de formato…—. El dinero se sigue calculando como costo menos abonado; la etapa solo dice en qué punto va. Usa <strong>En trámite</strong> para lo que todavía es una cotización sin aprobar: sale de «Por cobrar» y suma en su propio indicador. Marca «Anulado» solo en lo que ya no se piensa cobrar. Y <strong>No contabilizar</strong> para lo que no es plata —garantías, cortesías, trabajo interno—: la intervención se registra igual y sigue contando para la disponibilidad, pero no entra en ningún indicador de dinero, ni siquiera en el costo total.',
+                    'foot'   => 'La clave interna no cambia aunque renombres la etapa, así que no se pierde nada de lo ya guardado. Cambiar una etapa a «En trámite» sí mueve plata de «Por cobrar» a «En trámite» en todos los indicadores.',
                 ];
             default:
                 return [
@@ -373,7 +444,9 @@ class CMH_Taxonomy {
     /** Clave interna: minúsculas, sin acentos, solo letras, números y guion bajo. */
     public static function clean_slug( $v ) {
         $v = strtolower( remove_accents( trim( (string) $v ) ) );
-        return preg_replace( '/[^a-z0-9_]/', '', $v );
+        // El mismo tope que slugify(): la clave viaja a payment_status y a
+        // maintenance_type, y una más larga que la columna no se puede guardar.
+        return trim( substr( preg_replace( '/[^a-z0-9_]/', '', $v ), 0, 40 ), '_' );
     }
 
     /** Clave derivada de un nombre escrito por una persona. */
