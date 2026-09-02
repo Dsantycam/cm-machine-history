@@ -619,9 +619,11 @@ class CMH_Tech {
             . '<div id="cmh-hourmeter-warn" class="cmh-field-warning" style="display:none"></div>';
 
         echo '<div class="cmh-form-section"><p class="cmh-form-section-title">Falla / Parada</p>'
-            . '<label>Sistema / Falla</label><select name="failure_system"><option value="">— Seleccionar —</option>';
-        foreach ( $systems as $k => $v ) echo '<option value="' . esc_attr( $k ) . '">' . esc_html( $v ) . '</option>';
-        echo '</select>'
+            . '<label>Sistema / Falla <span class="cmh-optional">(puedes marcar varios)</span></label>'
+            . '<span class="cmh-checklist">';
+        foreach ( $systems as $k => $v )
+            echo '<label class="cmh-inline-check"><input type="checkbox" name="failure_system[]" value="' . esc_attr( $k ) . '"> ' . esc_html( $v ) . '</label>';
+        echo '</span>'
             . '<label>Horas parada <span class="cmh-optional">(averías)</span></label>'
             . '<input type="number" step="0.01" name="downtime_hours" value="0" min="0"></div>';
 
@@ -705,7 +707,7 @@ class CMH_Tech {
             'downtime_hours'       => floatval( $_POST['downtime_hours'] ),
             'cost'                 => 0,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, 0 ),
-            'failure_system'       => sanitize_text_field( $_POST['failure_system'] ),
+            'failure_system'       => CMH_Taxonomy::systems_to_string( (array) ( $_POST['failure_system'] ?? [] ) ),
             'parts'                => sanitize_textarea_field( $_POST['parts'] ),
             'services'             => sanitize_textarea_field( $_POST['services'] ),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),

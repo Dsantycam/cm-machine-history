@@ -290,6 +290,73 @@ class CMH_Taxonomy {
         return self::badge( self::system_label( $slug ), self::systems()[ strtolower( (string) $slug ) ]['color'] ?? 'gray' );
     }
 
+    // -------------------------------------------------------------------------
+    // Varios sistemas a la vez (v2.6)
+    //
+    // Una avería puede tocar más de un sistema, y en el formulario eso suele ser
+    // un checkbox. La columna guarda las claves separadas por coma; una celda con
+    // un solo valor —todo lo registrado hasta ahora— se lee igual que siempre.
+    // -------------------------------------------------------------------------
+
+    /** Claves de una celda, venga con uno o con varios. */
+    public static function systems_from_string( $value ) {
+        $out = [];
+        foreach ( explode( ',', (string) $value ) as $slug ) {
+            $slug = self::clean_slug( $slug );
+            if ( $slug !== '' && ! in_array( $slug, $out, true ) ) $out[] = $slug;
+        }
+        return $out;
+    }
+
+    /**
+     * Arma la celda a partir de una lista de claves. La columna admite 190
+     * caracteres, así que se corta por entradas completas y nunca a mitad de una
+     * clave: media clave no significa nada y ensuciaría los reportes.
+     */
+    public static function systems_to_string( $slugs ) {
+        $str = '';
+        foreach ( self::systems_from_string( implode( ',', (array) $slugs ) ) as $slug ) {
+            $try = ( $str === '' ) ? $slug : $str . ',' . $slug;
+            if ( strlen( $try ) > 190 ) break;
+            $str = $try;
+        }
+        return $str;
+    }
+
+    /** Etiquetas legibles de una celda: «Frenos · Sist. Hidráulico». */
+    public static function systems_label( $value ) {
+        $labels = array_map( [ __CLASS__, 'system_label' ], self::systems_from_string( $value ) );
+        return $labels ? implode( ' · ', $labels ) : '';
+    }
+
+    /** Un badge por sistema. */
+    public static function systems_badges( $value ) {
+        $out = '';
+        foreach ( self::systems_from_string( $value ) as $slug ) $out .= self::system_badge( $slug ) . ' ';
+        return trim( $out );
+    }
+
+    /**
+     * Clave de un sistema, dándolo de alta si no existía.
+     *
+     * Hasta la v2.5 un valor que no estuviera escrito en la tabla de traducción
+     * se descartaba en silencio, así que la gráfica de averías por sistema salía
+     * incompleta sin que nada lo dijera. Ahora la lista se alimenta sola y el
+     * usuario puede renombrar después lo que llegue, sin perder el registro.
+     */
+    public static function ensure_system( $label ) {
+        $label = trim( (string) $label );
+        $slug  = self::slugify( $label );
+        if ( $slug === '' ) return '';
+
+        $all = self::systems();
+        if ( isset( $all[ $slug ] ) ) return $slug;
+
+        $all[ $slug ] = [ 'label' => $label, 'color' => 'gray' ];
+        update_option( self::OPTION_SYSTEMS, $all, true );
+        return $slug;
+    }
+
     // =========================================================================
     // Plumbing común a las tres listas
     // =========================================================================

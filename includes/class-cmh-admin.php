@@ -1621,7 +1621,7 @@ class CMH_Admin {
                 . '<span>H: ' . esc_html( $r->hourmeter ) . '</span>'
                 . '<span>Parada: ' . esc_html( $r->downtime_hours ) . ' h</span>'
                 . ( (float) $r->cost > 0 ? '<span>Costo: $' . number_format( (float) $r->cost, 0, ',', '.' ) . '</span>' : '' )
-                . ( $r->failure_system ? '<span>' . esc_html( ucfirst( $r->failure_system ) ) . '</span>' : '' )
+                . ( $r->failure_system ? '<span>' . esc_html( CMH_Taxonomy::systems_label( $r->failure_system ) ) . '</span>' : '' )
                 . '</div>';
             if ( $r->services )     echo '<p><strong>Servicios:</strong> '     . esc_html( wp_trim_words( $r->services,     32 ) ) . '</p>';
             if ( $r->observations ) echo '<p><strong>Observaciones:</strong> ' . esc_html( wp_trim_words( $r->observations, 32 ) ) . '</p>';
@@ -1748,9 +1748,12 @@ class CMH_Admin {
         // ── Falla y parada (solo cuando el tipo lo pide) ──────────────────
         echo '<fieldset class="cmh-fieldset" id="cmh-downtime-fields"><legend>Falla y parada</legend>'
             . '<div class="cmh-form-grid">'
-            . '<label>Sistema / falla<select name="failure_system"><option value="">— Seleccionar —</option>';
-        foreach ( $systems as $k => $v ) echo '<option value="' . esc_attr( $k ) . '">' . esc_html( $v ) . '</option>';
-        echo '</select></label>'
+            // v2.6 — Varios sistemas: una avería puede tocar más de uno.
+            . '<label>Sistema / falla <span class="cmh-optional">(puedes marcar varios)</span>'
+            . '<span class="cmh-checklist">';
+        foreach ( $systems as $k => $v )
+            echo '<label class="cmh-inline-check"><input type="checkbox" name="failure_system[]" value="' . esc_attr( $k ) . '"> ' . esc_html( $v ) . '</label>';
+        echo '</span></label>'
             . '<label>Horas de parada <span class="cmh-optional">(averías)</span>'
             . '<input type="number" step="0.01" name="downtime_hours" value="0" min="0"></label>'
             . '</div></fieldset>';
@@ -1982,7 +1985,7 @@ class CMH_Admin {
             'payment_status'       => $pay_status,
             'paid_amount'          => $pay_paid,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
-            'failure_system'       => sanitize_text_field( $_POST['failure_system'] ),
+            'failure_system'       => CMH_Taxonomy::systems_to_string( (array) ( $_POST['failure_system'] ?? [] ) ),
             'parts'                => sanitize_textarea_field( $_POST['parts'] ),
             'services'             => sanitize_textarea_field( $_POST['services'] ),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),
@@ -2161,7 +2164,12 @@ class CMH_Admin {
         );
         self::csv_headers( 'intervenciones-' . date( 'Y-m-d' ) . '.csv' );
         self::csv_row( [ 'Fecha', 'Máquina', 'Tipo', 'Formato', 'Técnico', 'Horómetro', 'H.Trabajadas', 'H.Parada', 'Afecta Disp.', 'Sistema/Falla', 'Costo', 'Estado pago', 'Abonado', 'Saldo', 'Repuestos', 'Servicios', 'Observaciones' ] );
-        foreach ( $rows as $r ) self::csv_row( array_values( $r ) );
+        foreach ( $rows as $r ) {
+            // Los sistemas salen con su nombre y no con la clave interna, que es
+            // lo que se abre en Excel.
+            $r['failure_system'] = CMH_Taxonomy::systems_label( $r['failure_system'] );
+            self::csv_row( array_values( $r ) );
+        }
         exit;
     }
 

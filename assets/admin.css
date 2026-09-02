@@ -631,6 +631,19 @@ body.cmh-modal-open { overflow: hidden; }
 /* ── Estado vacío con salida ──────────────────────────────────── */
 .cmh-empty-actions { margin-top: 14px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
+/* ── Lista de casillas (varios sistemas de falla) ──────────────────
+   En rejilla, para que quepan sin volverse una columna larguísima.
+   Con scroll propio: si el usuario carga 30 sistemas, el formulario
+   no puede crecer hasta empujar el boton de guardar fuera de vista. */
+.cmh-checklist {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 2px 12px; max-height: 190px; overflow-y: auto;
+    margin-top: 4px; padding: 8px 10px;
+    border: 1px solid var(--cmh-gray-200); border-radius: 4px;
+    background: #fff;
+}
+.cmh-checklist .cmh-inline-check { margin: 0; font-weight: 400; white-space: nowrap; }
+
 /* ── Aviso de filtros restaurados ─────────────────────────────────
    Al volver a una pantalla se reponen los filtros que traía, pero
    eso no puede ser invisible: sin este aviso, una lista corta se
