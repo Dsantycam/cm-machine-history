@@ -321,17 +321,21 @@ class CMH_Metrics {
      * @return int  0 o 1.
      */
     public static function auto_affects_availability( $maintenance_type, $manual_value = null ) {
-        switch ( $maintenance_type ) {
-            case 'averia':
-                return 1;
-            case 'preventivo':
-            case 'evaluacion':
-                return 0;
-            case 'correctivo':
-                return ( $manual_value !== null ) ? (int) $manual_value : 1;
-            default:
-                return ( $manual_value !== null ) ? (int) $manual_value : 0;
+        // v2.3 — Sale de la taxonomía configurable: un tipo marcado como «descuenta
+        // disponibilidad» se comporta como avería, sea cual sea su nombre.
+        if ( CMH_Taxonomy::mtype_affects( $maintenance_type ) ) return 1;
+
+        // «Correctivo» es el único caso con matiz histórico: si el formulario trae
+        // un valor explícito manda ese, y si no, descuenta. Se conserva tal cual
+        // para no alterar lo ya registrado.
+        if ( 'correctivo' === strtolower( (string) $maintenance_type ) ) {
+            return ( $manual_value !== null ) ? (int) $manual_value : 1;
         }
+
+        // Un tipo conocido que no descuenta, no descuenta. Uno desconocido respeta
+        // lo que diga el formulario.
+        if ( isset( CMH_Taxonomy::mtypes()[ strtolower( (string) $maintenance_type ) ] ) ) return 0;
+        return ( $manual_value !== null ) ? (int) $manual_value : 0;
     }
 
     /** Formatea un porcentaje de disponibilidad para mostrar en UI. */

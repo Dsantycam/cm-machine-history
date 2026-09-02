@@ -293,6 +293,56 @@ class CMH_Integration {
     }
 
     /** Valores marcados de un checkbox/radio/select, normalizados para comparar. */
+    /**
+     * v2.3 — Cierra la tarea que este envío da por hecha.
+     *
+     * Se elige por deducción, porque el formato no puede cargar el número de
+     * tarea sin romper el nombre del PDF de E2PDF:
+     *   1. Solo se miran tareas EN CURSO de esa máquina. Una tarea pendiente que
+     *      nadie abrió no se cierra sola: no hay señal de que sea esta.
+     *   2. Si hay varias, gana la del técnico que firma el formulario; si no se
+     *      reconoce el nombre, la más antigua.
+     *   3. Si no hay ninguna en curso, no se toca nada.
+     *
+     * Se puede apagar desde «Máquinas → Ajustes».
+     *
+     * @return int  ID de la tarea cerrada, o 0.
+     */
+    public static function close_task_for_machine( $machine_id, $technician_name = '' ) {
+        global $wpdb; $t = CMH_Core::tables();
+
+        if ( class_exists( 'CMH_Schedule' ) && ! CMH_Schedule::setting( 'auto_complete_task' ) ) return 0;
+
+        $tasks = $wpdb->get_results( $wpdb->prepare(
+            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND status='en_progreso' ORDER BY id ASC",
+            (int) $machine_id
+        ) );
+        if ( ! $tasks ) return 0;
+
+        $chosen = $tasks[0];
+        if ( count( $tasks ) > 1 && $technician_name !== '' ) {
+            $needle = self::norm( $technician_name );
+            foreach ( $tasks as $ta ) {
+                if ( ! $ta->assigned_to ) continue;
+                $name = self::norm( get_the_author_meta( 'display_name', (int) $ta->assigned_to ) );
+                if ( $name !== '' && ( $name === $needle || strpos( $needle, $name ) !== false || strpos( $name, $needle ) !== false ) ) {
+                    $chosen = $ta;
+                    break;
+                }
+            }
+        }
+
+        $wpdb->update( $t['tasks'],
+            [ 'status' => 'completada', 'updated_at' => current_time( 'mysql' ) ],
+            [ 'id' => (int) $chosen->id ]
+        );
+
+        // El reloj de horas para cuando para la tarea.
+        if ( class_exists( 'CMH_Time' ) ) CMH_Time::on_status_change( $chosen, 'completada', 0 );
+
+        return (int) $chosen->id;
+    }
+
     // =========================================================================
     // Motor de reglas del tipo de mantenimiento (v2.2)
     // =========================================================================
@@ -472,6 +522,16 @@ class CMH_Integration {
         if ( $next ) {
             CMH_Core::log( 'info', $form_id, $machine_code, $intervention_id,
                 'Próximo mantenimiento reprogramado para ' . $next . '.', [] );
+        }
+
+        // v2.3 — La tarea se da por terminada al llegar su intervención.
+        // El formato NO puede llevar el número de tarea: E2PDF usa `hidden-1` para
+        // el nombre del PDF y tocarlo rompería la asociación del archivo. Así que
+        // se cierra por deducción: la tarea EN CURSO de esa máquina.
+        $closed = self::close_task_for_machine( (int) $machine->id, $p['technician'] ?? '' );
+        if ( $closed ) {
+            CMH_Core::log( 'info', $form_id, $machine_code, $intervention_id,
+                'Tarea #' . $closed . ' marcada como completada por este envío.', [] );
         }
 
         // Epoch real del envío (no la fecha de la BD): así la ventana de búsqueda es

@@ -281,7 +281,7 @@ class CMH_Reports {
                     COALESCE(SUM(i.downtime_hours),0) dt_total,
                     COALESCE(SUM(i.cost),0) costo,
                     COALESCE(SUM(i.paid_amount),0) pagado,
-                    COALESCE(SUM(CASE WHEN i.cost>i.paid_amount THEN i.cost-i.paid_amount ELSE 0 END),0) por_cobrar
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
              FROM {$t['interventions']} i
              JOIN {$t['machines']} m ON m.id=i.machine_id
              WHERE i.intervention_date BETWEEN %s AND %s $where",
@@ -304,7 +304,7 @@ class CMH_Reports {
                     COUNT(*) total,
                     COALESCE(SUM(i.cost),0) costo,
                     COALESCE(SUM(i.paid_amount),0) pagado,
-                    COALESCE(SUM(CASE WHEN i.cost>i.paid_amount THEN i.cost-i.paid_amount ELSE 0 END),0) por_cobrar
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
              FROM {$t['interventions']} i
              JOIN {$t['machines']} m ON m.id=i.machine_id
              WHERE i.intervention_date BETWEEN %s AND %s $where
@@ -385,7 +385,7 @@ class CMH_Reports {
                     COUNT(i.id) total,
                     COALESCE(SUM(i.cost),0) costo,
                     COALESCE(SUM(i.paid_amount),0) pagado,
-                    COALESCE(SUM(CASE WHEN i.cost>i.paid_amount THEN i.cost-i.paid_amount ELSE 0 END),0) por_cobrar
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
              FROM {$t['machines']} m
              $join
              LEFT JOIN {$t['interventions']} i
@@ -448,7 +448,7 @@ class CMH_Reports {
                     COUNT(i.id) total,
                     COALESCE(SUM(i.cost),0) costo,
                     COALESCE(SUM(i.paid_amount),0) pagado,
-                    COALESCE(SUM(CASE WHEN i.cost>i.paid_amount THEN i.cost-i.paid_amount ELSE 0 END),0) por_cobrar
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
              FROM {$t['machines']} m
              JOIN {$t['companies']} co ON co.id=m.company_id
              JOIN {$t['cities']}    ci ON ci.id=m.city_id

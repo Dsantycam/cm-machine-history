@@ -329,12 +329,15 @@ class CMH_Time {
         global $wpdb; $t = CMH_Core::tables();
 
         $f = self::filters();
-        CMH_Admin::page_header( 'Horas de técnicos', [
+        CMH_Admin::page_header( 'Equipo técnico', [
             [ 'label' => 'Máquinas', 'url' => CMH_Admin::admin_url( CMH_SLUG ) ],
-            [ 'label' => 'Horas de técnicos' ],
+            [ 'label' => 'Equipo técnico' ],
         ] );
 
         self::render_filter_bar( $f );
+
+        // v2.3 — Vista general de las tareas del equipo, sin entrar máquina por máquina.
+        self::render_team_tasks( $f );
 
         $techs = self::by_tech( $f );
         $total = 0; foreach ( $techs as $r ) $total += (int) $r->secs;
@@ -437,6 +440,106 @@ class CMH_Time {
         self::render_segments( $f );
 
         echo '</div>'; // .wrap abierto por page_header
+    }
+
+    /**
+     * v2.3 — Todas las tareas del equipo en un solo sitio.
+     *
+     * Antes había que entrar máquina por máquina para saber qué tenía pendiente
+     * el equipo. Vive aquí, junto a las horas, porque es la pantalla del equipo
+     * técnico. Muestra lo abierto por defecto; lo completado se pide aparte.
+     */
+    public static function render_team_tasks( $f ) {
+        global $wpdb; $t = CMH_Core::tables();
+
+        $show = ( ( $_GET['tasks'] ?? '' ) === 'todas' ) ? 'todas' : 'abiertas';
+
+        $where = [];
+        if ( $show === 'abiertas' ) $where[] = "ta.status <> 'completada'";
+        if ( $f['user_id'] )    $where[] = $wpdb->prepare( 'ta.assigned_to=%d', $f['user_id'] );
+        if ( $f['machine_id'] ) $where[] = $wpdb->prepare( 'ta.machine_id=%d', $f['machine_id'] );
+        if ( $f['company_id'] ) $where[] = $wpdb->prepare( 'm.company_id=%d', $f['company_id'] );
+        $sql_where = $where ? ( 'WHERE ' . implode( ' AND ', $where ) ) : '';
+
+        $rows = $wpdb->get_results(
+            "SELECT ta.*, m.machine_code, c.name AS company_name
+             FROM {$t['tasks']} ta
+             LEFT JOIN {$t['machines']}  m ON m.id = ta.machine_id
+             LEFT JOIN {$t['companies']} c ON c.id = m.company_id
+             $sql_where
+             ORDER BY FIELD(ta.status,'en_progreso','pendiente','completada'),
+                      ta.due_date IS NULL, ta.due_date ASC, ta.id DESC
+             LIMIT 300"
+        );
+
+        $secs    = self::seconds_by_task( wp_list_pluck( $rows, 'id' ) );
+        $running = self::running_task_ids();
+        $today   = current_time( 'Y-m-d' );
+
+        // Un vistazo rápido antes de la tabla.
+        $open = $late = $doing = 0;
+        foreach ( $rows as $r ) {
+            if ( $r->status === 'completada' ) continue;
+            $open++;
+            if ( $r->status === 'en_progreso' ) $doing++;
+            if ( $r->due_date && $r->due_date < $today ) $late++;
+        }
+
+        echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Tareas del equipo</h2>'
+            . '<div class="cmh-view-switch">'
+            . '<a class="button button-small' . ( $show === 'abiertas' ? ' active' : '' ) . '" href="'
+            . esc_url( add_query_arg( 'tasks', 'abiertas', self::page_url( $f ) ) ) . '">Abiertas</a>'
+            . '<a class="button button-small' . ( $show === 'todas' ? ' active' : '' ) . '" href="'
+            . esc_url( add_query_arg( 'tasks', 'todas', self::page_url( $f ) ) ) . '">Todas</a>'
+            . '</div></div>';
+
+        echo '<p class="cmh-hint">' . intval( $open ) . ' abierta(s) · ' . intval( $doing ) . ' en curso · '
+            . ( $late
+                ? '<strong style="color:#d63638">' . intval( $late ) . ' vencida(s)</strong>'
+                : 'ninguna vencida' )
+            . ' · usa los filtros de arriba para acotar por técnico o empresa.</p>';
+
+        if ( ! $rows ) {
+            echo '<p class="cmh-muted">No hay tareas que mostrar con estos filtros.</p></div>';
+            return;
+        }
+
+        echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr>'
+            . '<th>Tarea</th><th>Máquina</th><th>Técnico</th><th>Vence</th>'
+            . '<th>Estado</th><th class="cmh-num">Horas</th><th></th>'
+            . '</tr></thead><tbody>';
+
+        foreach ( $rows as $r ) {
+            $late_row = ( $r->status !== 'completada' && $r->due_date && $r->due_date < $today );
+            $back     = self::page_url( $f );
+
+            echo '<tr>'
+                . '<td><strong>' . esc_html( $r->title ) . '</strong>'
+                . ( ( $r->source ?? '' ) === 'auto' ? ' <span class="cmh-badge cmh-badge-xs" style="background:#e7f0f7;color:#2271b1">Auto</span>' : '' )
+                . '</td>'
+                . '<td class="cmh-nowrap">' . ( $r->machine_id
+                    ? '<a href="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $r->machine_id ] ) ) . '">'
+                      . esc_html( $r->machine_code ?: '—' ) . '</a>'
+                    : '—' )
+                . ( $r->company_name ? '<br><span class="cmh-muted">' . esc_html( $r->company_name ) . '</span>' : '' ) . '</td>'
+                . '<td>' . esc_html( $r->assigned_to ? self::user_name( $r->assigned_to ) : '— Sin asignar —' ) . '</td>'
+                . '<td class="cmh-nowrap">' . ( $r->due_date
+                    ? ( $late_row
+                        ? '<span style="color:#d63638;font-weight:600">' . esc_html( $r->due_date ) . '</span>'
+                        : esc_html( $r->due_date ) )
+                    : '<span class="cmh-muted">—</span>' ) . '</td>'
+                . '<td>' . CMH_Tech::task_status_badge( $r->status )
+                . ( in_array( (int) $r->id, $running, true ) ? ' <span class="cmh-badge cmh-badge-xs" style="background:#e7f0fb;color:#1c4d80">reloj</span>' : '' ) . '</td>'
+                . '<td class="cmh-num">' . esc_html( isset( $secs[ (int) $r->id ] ) ? self::format( $secs[ (int) $r->id ] ) : '—' ) . '</td>'
+                . '<td class="cmh-row-actions">' . CMH_Tech::complete_button( $r, $back ) . '</td>'
+                . '</tr>';
+        }
+        echo '</tbody></table></div>';
+
+        if ( count( $rows ) >= 300 )
+            echo '<p class="cmh-hint">Se muestran las 300 primeras. Afina los filtros para ver el resto.</p>';
+
+        echo '</div>';
     }
 
     private static function render_filter_bar( $f ) {
