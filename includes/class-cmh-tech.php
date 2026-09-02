@@ -258,6 +258,7 @@ class CMH_Tech {
                 [ 'status' => 'en_progreso', 'updated_at' => current_time( 'mysql' ) ],
                 [ 'id' => (int) $task->id ]
             );
+            CMH_Time::on_status_change( $task, 'en_progreso', get_current_user_id() );
         }
 
         wp_safe_redirect( $url );
@@ -600,6 +601,9 @@ class CMH_Tech {
         if ( ! isset( self::TASK_STATUSES[ $status ] ) ) wp_die( 'Estado inválido.' );
 
         $wpdb->update( $t['tasks'], [ 'status' => $status, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $task_id ] );
+
+        // v2.1 — El reloj de horas sigue al estado de la tarea.
+        CMH_Time::on_status_change( $task, $status, get_current_user_id() );
 
         CMH_Admin::redirect_to(
             CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => (int) $task->machine_id ] ),

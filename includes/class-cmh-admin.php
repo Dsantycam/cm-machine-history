@@ -46,6 +46,7 @@ class CMH_Admin {
         add_submenu_page( $slug, 'Empresas',        'Empresas',        'edit_others_posts', $slug . '-companies',   [ __CLASS__, 'page_companies' ] );
         add_submenu_page( $slug, 'Buscar máquinas', 'Buscar máquinas', 'edit_others_posts', $slug . '-machines',    [ __CLASS__, 'page_machines' ] );
         add_submenu_page( $slug, 'Reportes',        'Reportes',        'edit_others_posts', $slug . '-reports',     [ 'CMH_Reports', 'page_reports' ] );
+        add_submenu_page( $slug, 'Horas de técnicos', 'Horas técnicos',  'edit_others_posts', $slug . '-time',        [ 'CMH_Time', 'page_time' ] );
         add_submenu_page( $slug, 'Formatos',        'Formatos',        'edit_others_posts', $slug . '-forms',       [ 'CMH_Forms', 'page_forms' ] );
         add_submenu_page( $slug, 'Integración',     'Integración',     'edit_others_posts', $slug . '-integration', [ __CLASS__, 'page_integration' ] );
         add_submenu_page( $slug, 'Ajustes',         'Ajustes',         'edit_others_posts', $slug . '-settings',    [ 'CMH_Schedule', 'page_settings' ] );
@@ -1803,7 +1804,10 @@ class CMH_Admin {
 
         $tasks = CMH_Tech::tasks_for_machine( $machine_id );
         if ( $tasks ) {
-            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Técnico</th><th>Vence</th><th>Estado</th><th>Formato</th><th></th></tr></thead><tbody>';
+            // v2.1 — Horas trabajadas por tarea (solo visibles para el admin).
+            $task_secs   = CMH_Time::seconds_by_task( wp_list_pluck( $tasks, 'id' ) );
+            $running_ids = CMH_Time::running_task_ids();
+            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Técnico</th><th>Vence</th><th>Estado</th><th>Horas</th><th>Formato</th><th></th></tr></thead><tbody>';
             foreach ( $tasks as $ta ) {
                 $tech_name = $ta->assigned_to ? get_the_author_meta( 'display_name', $ta->assigned_to ) : '—';
                 echo '<tr>'
@@ -1813,6 +1817,10 @@ class CMH_Admin {
                     . '<td>' . esc_html( $tech_name ?: '—' ) . '</td>'
                     . '<td>' . esc_html( $ta->due_date ?: '—' ) . '</td>'
                     . '<td>' . CMH_Tech::task_status_badge( $ta->status ) . '</td>'
+                    . '<td>' . ( in_array( (int) $ta->id, $running_ids, true )
+                        ? '<span class="cmh-badge" style="background:#e7f0fb;color:#1c4d80">En curso</span> '
+                        : '' )
+                        . esc_html( isset( $task_secs[ (int) $ta->id ] ) ? CMH_Time::format( $task_secs[ (int) $ta->id ] ) : '—' ) . '</td>'
                     . '<td>' . CMH_Tech::open_form_control( $ta, $back ) . '</td>'
                     . '<td style="display:flex;gap:6px">'
                     . '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-task-' . intval( $ta->id ) . '">Editar</button>'
@@ -1825,7 +1833,7 @@ class CMH_Admin {
                     . '<button class="button button-small" style="color:#d63638;border-color:#d63638">Eliminar</button>'
                     . '</form></td></tr>';
                 // Fila de edición inline
-                echo '<tr id="cmh-task-' . intval( $ta->id ) . '" style="display:none"><td colspan="6" style="background:#f6f7f7">';
+                echo '<tr id="cmh-task-' . intval( $ta->id ) . '" style="display:none"><td colspan="7" style="background:#f6f7f7">';
                 self::task_form( $machine_id, $back, $ta );
                 echo '</td></tr>';
             }
@@ -1930,20 +1938,30 @@ class CMH_Admin {
         self::check(); global $wpdb; $t = CMH_Core::tables();
         $task_id    = intval( $_POST['task_id'] );
         $machine_id = intval( $_POST['machine_id'] );
-        if ( ! $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['tasks']} WHERE id=%d", $task_id ) ) )
-            wp_die( 'Tarea no encontrada.' );
+        $task       = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['tasks']} WHERE id=%d", $task_id ) );
+        if ( ! $task ) wp_die( 'Tarea no encontrada.' );
         $status = sanitize_key( $_POST['status'] ?? 'pendiente' );
         if ( ! isset( CMH_Tech::TASK_STATUSES[ $status ] ) ) $status = 'pendiente';
 
+        $assigned_to = intval( $_POST['assigned_to'] ) ?: null;
+
         $wpdb->update( $t['tasks'], [
             'title'       => sanitize_text_field( $_POST['title'] ),
-            'assigned_to' => intval( $_POST['assigned_to'] ) ?: null,
+            'assigned_to' => $assigned_to,
             'notes'       => sanitize_textarea_field( $_POST['notes'] ?? '' ),
             'due_date'    => sanitize_text_field( $_POST['due_date'] ?? '' ) ?: null,
             'status'      => $status,
             'form_id'     => self::form_id_from_post(),
             'updated_at'  => current_time( 'mysql' ),
         ], [ 'id' => $task_id ] );
+
+        // v2.1 — El reloj de horas sigue al estado de la tarea. Las horas se le
+        // cargan al técnico asignado tras este guardado, nunca al administrador.
+        if ( $task->status !== $status ) {
+            $task->assigned_to = $assigned_to;
+            CMH_Time::on_status_change( $task, $status, get_current_user_id() );
+        }
+
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea actualizada.' );
     }
 
@@ -1952,6 +1970,8 @@ class CMH_Admin {
         $task_id    = intval( $_POST['task_id'] );
         $machine_id = intval( $_POST['machine_id'] );
         $wpdb->delete( $t['tasks'], [ 'id' => $task_id ] );
+        // v2.1 — Sin la tarea, sus tramos de horas quedarían huérfanos.
+        $wpdb->delete( $t['task_time'], [ 'task_id' => $task_id ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea eliminada.' );
     }
 }
