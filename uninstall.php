@@ -2,10 +2,35 @@
 /**
  * CM Machine History — limpieza al desinstalar.
  * Se ejecuta cuando el usuario elimina el plugin desde el panel de WordPress.
+ *
+ * v2.2 — POR DEFECTO NO BORRA NADA.
+ *
+ * Hasta la v2.1 este archivo arrasaba con todas las tablas sin preguntar, así que
+ * eliminar el plugin —aunque fuera para reinstalarlo, o para quitar una copia
+ * duplicada— se llevaba por delante máquinas, intervenciones, tareas y accesos,
+ * sin vuelta atrás salvo copia de seguridad. Un botón de la pantalla de Plugins
+ * no debería poder hacer eso.
+ *
+ * Ahora el borrado solo ocurre si el administrador lo pidió explícitamente en
+ * «Máquinas → Ajustes». Sin esa marca, los datos sobreviven a la desinstalación y
+ * vuelven a aparecer si el plugin se instala de nuevo.
  */
 if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) exit;
 
 global $wpdb;
+
+// El evento de cron se limpia siempre: sin plugin no hay quién lo atienda.
+wp_clear_scheduled_hook( 'cmh_daily_maintenance_event' );
+
+$cmh_settings = get_option( 'cmh_settings', [] );
+$cmh_wipe     = is_array( $cmh_settings ) && ! empty( $cmh_settings['delete_data_on_uninstall'] );
+
+if ( ! $cmh_wipe ) {
+    // Se conserva todo: tablas, opciones y roles. Volver a instalar el plugin
+    // encuentra los datos intactos.
+    return;
+}
+
 $prefix = $wpdb->prefix . 'cmh_';
 foreach ( [ 'task_time', 'client_cities', 'client_companies', 'tasks', 'assignments', 'logs', 'files', 'interventions', 'machines', 'branches', 'cities', 'companies' ] as $table ) {
     $wpdb->query( "DROP TABLE IF EXISTS {$prefix}{$table}" );
@@ -24,7 +49,6 @@ delete_option( 'cmh_form_urls' );
 foreach ( [ 215, 225, 226 ] as $cmh_form ) {
     delete_transient( 'cmh_form_url_' . $cmh_form );
 }
-wp_clear_scheduled_hook( 'cmh_daily_maintenance_event' );
 
 // v0.9 — eliminar rol de técnico y su capacidad.
 remove_role( 'cmh_technician' );

@@ -68,6 +68,7 @@ class CMH_Schedule {
             'auto_task_title'   => 'Mantenimiento preventivo programado',
             'auto_task_when'    => 'immediate', // 'immediate' o 'window'
             'time_max_hours'    => 12,  // tope por tramo de trabajo del técnico
+            'delete_data_on_uninstall' => 0, // al eliminar el plugin, NO borrar datos
             'last_run'          => '',  // 'Y-m-d H:i:s' (hora local del sitio)
             'last_summary'      => '',  // resumen legible de la última corrida
         ];
@@ -673,6 +674,15 @@ class CMH_Schedule {
             . 'Puedes corregir cualquier tramo a mano en <a href="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-time' ) ) . '">Máquinas → Horas técnicos</a>.</p>'
             . '</div>'
 
+            . '<div class="cmh-form-section">'
+            . '<p class="cmh-form-section-title" style="color:#d63638">Al eliminar el plugin</p>'
+            . '<label><input type="checkbox" name="delete_data_on_uninstall" value="1" ' . checked( $s['delete_data_on_uninstall'], 1, false ) . '> '
+            . '<strong>Borrar todos los datos si elimino el plugin</strong></label>'
+            . '<p style="font-size:12px;color:#646970;margin:6px 0 0">Déjalo <strong>apagado</strong> salvo que sepas muy bien lo que haces. '
+            . 'Apagado, eliminar el plugin desde la pantalla de Plugins conserva máquinas, intervenciones, tareas, horas y accesos: si lo vuelves a instalar, todo sigue ahí. '
+            . 'Encendido, eliminarlo <strong>borra las 12 tablas del plugin sin posibilidad de deshacer</strong>. Desactivar el plugin nunca borra nada, con el interruptor como esté.</p>'
+            . '</div>'
+
             . '<button class="button button-primary">Guardar ajustes</button></form></div>';
 
         // Vista previa de lo que se enviaría hoy.
@@ -709,6 +719,7 @@ class CMH_Schedule {
             'auto_task_title'   => sanitize_text_field( $_POST['auto_task_title'] ?? '' ) ?: 'Mantenimiento preventivo programado',
             'auto_task_when'    => ( ( $_POST['auto_task_when'] ?? '' ) === 'window' ) ? 'window' : 'immediate',
             'time_max_hours'    => min( 24, max( 1, (int) ( $_POST['time_max_hours'] ?? 12 ) ) ),
+            'delete_data_on_uninstall' => isset( $_POST['delete_data_on_uninstall'] ) ? 1 : 0,
         ] );
 
         // Reprograma el job si se había perdido (p. ej. tras un cambio de cron).
