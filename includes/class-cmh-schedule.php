@@ -373,7 +373,9 @@ class CMH_Schedule {
         foreach ( CMH_Tech::technicians() as $u ) {
             if ( ! is_email( $u->user_email ) ) continue;
 
-            $machine_ids = CMH_Tech::assigned_machine_ids( (int) $u->ID );
+            // v2.0 — También las máquinas que solo tiene por tarea: si la tarea entra
+            // en el correo, su máquina debe entrar con ella.
+            $machine_ids = CMH_Tech::accessible_machine_ids( (int) $u->ID );
             $my_machines = array_values( array_filter( $machines, function ( $m ) use ( $machine_ids ) {
                 return in_array( (int) $m->id, $machine_ids, true );
             } ) );

@@ -172,6 +172,51 @@ class CMH_Metrics {
     }
 
     // -------------------------------------------------------------------------
+    // MTBF
+    // -------------------------------------------------------------------------
+
+    /**
+     * v2.0 — MTBF: horas de operación real entre fallas.
+     *
+     *   operación = horas programadas del periodo − horas de parada por averías
+     *   MTBF      = operación / cantidad de averías
+     *
+     * Se mide sobre una ventana móvil de meses (por defecto los últimos 12) para
+     * que el indicador tenga una base temporal explícita; sin averías no hay
+     * media entre fallas y devuelve null.
+     *
+     * @param int $machine_id 0 = flota completa.
+     * @param int $months     Meses hacia atrás, contando el mes actual.
+     * @return float|null Horas o null si no aplica.
+     */
+    public static function mtbf( $machine_id = 0, $months = 12 ) {
+        global $wpdb;
+        $t      = CMH_Core::tables();
+        $months = max( 1, (int) $months );
+
+        $scheduled = $machine_id
+            ? (float) $wpdb->get_var( $wpdb->prepare( "SELECT scheduled_hours_monthly FROM {$t['machines']} WHERE id=%d", $machine_id ) )
+            : (float) $wpdb->get_var( "SELECT COALESCE(SUM(scheduled_hours_monthly),0) FROM {$t['machines']}" );
+        if ( $scheduled <= 0 ) return null;
+
+        $from = date( 'Y-m-01', strtotime( '-' . ( $months - 1 ) . ' months', strtotime( current_time( 'Y-m-01' ) ) ) );
+        $to   = date( 'Y-m-t',  strtotime( current_time( 'Y-m-01' ) ) );
+
+        $where  = 'affects_availability=1 AND intervention_date BETWEEN %s AND %s';
+        $params = [ $from, $to ];
+        if ( $machine_id ) { $where .= ' AND machine_id=%d'; $params[] = (int) $machine_id; }
+
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT COALESCE(SUM(downtime_hours),0) dt, COUNT(*) cnt FROM {$t['interventions']} WHERE $where",
+            $params
+        ) );
+        if ( ! $row || (int) $row->cnt === 0 ) return null;
+
+        $base = $scheduled * $months;
+        return round( max( 0, $base - (float) $row->dt ) / (int) $row->cnt, 2 );
+    }
+
+    // -------------------------------------------------------------------------
     // Criticidad
     // -------------------------------------------------------------------------
 

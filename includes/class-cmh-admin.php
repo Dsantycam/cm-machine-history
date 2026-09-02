@@ -46,6 +46,7 @@ class CMH_Admin {
         add_submenu_page( $slug, 'Empresas',        'Empresas',        'edit_others_posts', $slug . '-companies',   [ __CLASS__, 'page_companies' ] );
         add_submenu_page( $slug, 'Buscar máquinas', 'Buscar máquinas', 'edit_others_posts', $slug . '-machines',    [ __CLASS__, 'page_machines' ] );
         add_submenu_page( $slug, 'Reportes',        'Reportes',        'edit_others_posts', $slug . '-reports',     [ 'CMH_Reports', 'page_reports' ] );
+        add_submenu_page( $slug, 'Formatos',        'Formatos',        'edit_others_posts', $slug . '-forms',       [ 'CMH_Forms', 'page_forms' ] );
         add_submenu_page( $slug, 'Integración',     'Integración',     'edit_others_posts', $slug . '-integration', [ __CLASS__, 'page_integration' ] );
         add_submenu_page( $slug, 'Ajustes',         'Ajustes',         'edit_others_posts', $slug . '-settings',    [ 'CMH_Schedule', 'page_settings' ] );
     }
@@ -195,6 +196,9 @@ class CMH_Admin {
 
         $avail_accent = $fleet_avail === null ? 'blue' : ( $fleet_avail >= 90 ? 'ok' : ( $fleet_avail >= 70 ? 'warn' : 'danger' ) );
 
+        // El dashboard es la vista del administrador: sin ACL y con su vocabulario.
+        CMH_Reports::reset_context();
+
         self::page_header( 'Dashboard' );
 
         echo '<div class="cmh-hero-block">'
@@ -209,9 +213,13 @@ class CMH_Admin {
         self::metric_card( 'Correctivos / Averías',  $correctivos,                                               'historial total',  'warn' );
         self::metric_card( 'Disponibilidad '  . $month_label, CMH_Metrics::fmt_pct( $fleet_avail ),             'flota ' . $month_label, $avail_accent );
         self::metric_card( 'MTTR ' . $month_label,   CMH_Metrics::fmt_mttr( $fleet_mttr ),                      'solo averías',     'warn' );
+        self::metric_card( 'MTBF flota',             CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( 0, 12 ) ),       'últimos 12 meses', 'blue' );
         self::metric_card( 'Horas parada '    . $month_label, number_format( $month_dt, 2, ',', '.' ) . ' h',  'por averías',      'danger' );
         self::metric_card( 'Costo total',            '$' . number_format( $cost_total, 0, ',', '.' ),            'historial',        'blue' );
         echo '</div>';
+
+        // v2.0 — Tendencia gráfica de la flota (disponibilidad, mezcla y costos).
+        CMH_Reports::dashboard_charts();
 
         if ( $critical ) {
             echo '<div class="cmh-panel cmh-panel-critical"><h2>Atención — Máquinas críticas este mes</h2>'
@@ -367,6 +375,7 @@ class CMH_Admin {
             . '<p>Código: <strong>' . esc_html( $c->code ) . '</strong> &nbsp;·&nbsp; '
             . intval( $stats->cities ) . ' ciudades · ' . intval( $stats->machines ) . ' máquinas</p>'
             . '</div><div class="cmh-hero-actions">'
+            . '<a class="button button-primary" href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'company_id' => $company_id ] ) ) . '">Ver reporte de la empresa</a>'
             . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'company_id' => $company_id ] ) ) . '">Exportar máquinas (CSV)</a>'
             . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Eliminar empresa \'+' . json_encode( $c->name ) . '+\' con ' . intval( $stats->cities ) . ' ciudades y ' . intval( $stats->machines ) . ' máquinas? Esta acción es irreversible.\')">'
             . '<input type="hidden" name="action" value="cm_delete_company">'
@@ -435,6 +444,7 @@ class CMH_Admin {
         $city_machine_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$t['machines']} WHERE city_id=%d", $city_id ) );
         echo '<div class="cmh-layout"><div class="cmh-main">';
         echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Máquinas en ' . esc_html( $city->name ) . '</h2><div style="display:flex;gap:8px;align-items:center">'
+            . '<a class="button button-primary" href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'city_id' => $city_id ] ) ) . '">Ver reporte de la sucursal</a>'
             . '<a class="button" href="' . esc_url( self::export_nonce_url( 'machines', [ 'city_id' => $city_id ] ) ) . '">Exportar CSV</a>'
             . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Eliminar ciudad/sucursal \'+' . json_encode( $city->name ) . '+\' con ' . $city_machine_count . ' máquinas? Esta acción es irreversible.\')">'
             . '<input type="hidden" name="action" value="cm_delete_city">'
@@ -447,7 +457,14 @@ class CMH_Admin {
 
         echo '<div class="cmh-side"><div class="cmh-panel"><h2>Agregar máquina</h2>';
         self::machine_form( $city->company_id, $city_id );
-        echo '</div><div class="cmh-panel"><h2>Editar ciudad/sucursal</h2>';
+        echo '</div>';
+
+        // v2.0 — Acceso de clientes acotado a ESTA ciudad/sucursal.
+        echo '<div class="cmh-panel"><h2>Clientes con acceso a esta sucursal</h2>';
+        CMH_Client::city_clients_panel( $city_id );
+        echo '</div>';
+
+        echo '<div class="cmh-panel"><h2>Editar ciudad/sucursal</h2>';
         self::form_start( 'cm_update_city' );
         echo '<input type="hidden" name="city_id" value="' . intval( $city_id ) . '">'
             . '<input type="hidden" name="redirect_to" value="' . esc_url( self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $city_id ] ) ) . '">'
@@ -571,6 +588,7 @@ class CMH_Admin {
             . '<p>' . esc_html( $loc ) . ' &nbsp;·&nbsp; ' . esc_html( trim( $m->brand . ' ' . $m->model ) ) . '</p>'
             . '</div><div class="cmh-hero-actions">'
             . '<button type="button" class="button button-primary cmh-btn-toggle-edit" data-target="cmh-schedule-box"><span class="dashicons dashicons-calendar-alt" style="vertical-align:middle;margin-top:-2px"></span> Programar mantenimiento</button>'
+            . '<a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'machine_id' => $machine_id ] ) ) . '">Ver reporte de la máquina</a>'
             . '<a class="button cmh-btn-print" href="#">Imprimir hoja de vida</a>'
             . '<a class="button" href="' . esc_url( self::export_nonce_url( 'interventions', [ 'machine_id' => $machine_id ] ) ) . '">Exportar intervenciones (CSV)</a>'
             . '<a class="button" href="' . esc_url( $m->branch_id ? self::admin_url( CMH_SLUG . '-companies', [ 'branch_id' => $m->branch_id ] ) : self::admin_url( CMH_SLUG . '-companies', [ 'city_id' => $m->city_id ] ) ) . '">Volver</a>'
@@ -600,6 +618,7 @@ class CMH_Admin {
         self::metric_card( 'H. parada averías', number_format( (float)$stats->downtime_averia, 2, ',', '.' ) . ' h', 'historial',         'danger' );
         self::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ), CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc );
         self::metric_card( 'MTTR',              CMH_Metrics::fmt_mttr( $mttr_all ),                                    'historial',         'warn' );
+        self::metric_card( 'MTBF',              CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( $machine_id, 12 ) ),        'últimos 12 meses',  'blue' );
         self::metric_card( 'Costo total',       '$' . number_format( (float)$stats->cost, 0, ',', '.' ),              'historial',         'blue' );
         self::metric_card( 'Por cobrar',        '$' . number_format( (float)$stats->por_cobrar, 0, ',', '.' ),        'saldo pendiente',   (float)$stats->por_cobrar > 0 ? 'warn' : 'ok' );
         self::metric_card( 'Horómetro',         number_format( (float)$m->current_hourmeter, 2, ',', '.' ) . ' h',   'actual',            'blue' );
@@ -610,7 +629,7 @@ class CMH_Admin {
             . '<div class="cmh-tabs">'
             . '<a href="#tab-resumen"  class="cmh-tab" data-tab="resumen">Resumen</a>'
             . '<a href="#tab-interv"   class="cmh-tab" data-tab="interv">Intervenciones (' . intval( $stats->total ) . ')</a>'
-            . '<a href="#tab-disponib" class="cmh-tab" data-tab="disponib">Disponibilidad</a>'
+            . '<a href="#tab-disponib" class="cmh-tab" data-tab="disponib">Indicadores</a>'
             . '<a href="#tab-pdfs"     class="cmh-tab" data-tab="pdfs">PDFs</a>'
             . '<a href="#tab-tecnicos" class="cmh-tab" data-tab="tecnicos">Técnicos</a>'
             . '<a href="#tab-editar"   class="cmh-tab" data-tab="editar">Editar</a>'
@@ -640,10 +659,15 @@ class CMH_Admin {
         self::intervention_cards( $machine_id );
         echo '</div>';
 
-        // Tab: Disponibilidad
+        // Tab: Indicadores — gráficas de la máquina + tabla de disponibilidad mensual
         echo '<div id="tab-disponib" class="cmh-tab-panel cmh-panel">'
-            . '<div class="cmh-toolbar"><h2>Disponibilidad mensual</h2>'
-            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'availability', [ 'machine_id' => $machine_id ] ) ) . '">Exportar CSV</a></div>';
+            . '<div class="cmh-toolbar"><h2>Indicadores de la máquina</h2>'
+            . '<div style="display:flex;gap:8px;align-items:center">'
+            . '<a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-reports', [ 'machine_id' => $machine_id ] ) ) . '">Reporte completo</a>'
+            . '<a class="button" href="' . esc_url( self::export_nonce_url( 'availability', [ 'machine_id' => $machine_id ] ) ) . '">Exportar CSV</a>'
+            . '</div></div>';
+        CMH_Reports::machine_charts( $machine_id, true );
+        echo '<h3 class="cmh-chart-title" style="margin-top:22px">Disponibilidad mensual — detalle</h3>';
         self::availability_table( $machine_id );
         echo '</div>';
 
@@ -814,7 +838,7 @@ class CMH_Admin {
             . '<label>Próximo mantenimiento <span class="cmh-optional">(opcional)</span><input type="date" name="next_maintenance_date" value="' . esc_attr( $m->next_maintenance_date ?: '' ) . '"></label>'
             . '<label>Mantenimiento recurrente <span class="cmh-tooltip" title="Al registrar un preventivo se reprograma la próxima fecha sumando este intervalo.">[?]</span>'
             . CMH_Schedule::interval_field( (int) ( $m->maintenance_interval_days ?? 0 ) ) . '</label>'
-            . '<label>Notas<textarea name="notes">' . esc_textarea( $m->notes ) . '</textarea></label>'
+            . '<label>Notas<textarea name="notes">' . esc_textarea( (string) $m->notes ) . '</textarea></label>'
             . '<button class="button button-primary">Guardar cambios</button></form>';
     }
 
@@ -990,7 +1014,7 @@ class CMH_Admin {
                 . '<label>Monto abonado<input type="number" step="100" name="paid_amount" value="' . esc_attr( $r->paid_amount ) . '" min="0"></label>'
                 . '</div>'
                 . '<label><input type="checkbox" name="affects_availability" value="1" ' . checked( $r->affects_availability, 1, false ) . '> Afecta disponibilidad</label>'
-                . '<label style="display:block;margin-top:8px">Observaciones<textarea name="observations">' . esc_textarea( $r->observations ) . '</textarea></label>'
+                . '<label style="display:block;margin-top:8px">Observaciones<textarea name="observations">' . esc_textarea( (string) $r->observations ) . '</textarea></label>'
                 . '<div style="margin-top:8px;display:flex;gap:8px">'
                 . '<button class="button button-primary button-small">Guardar</button>'
                 . '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-edit-' . intval( $r->id ) . '">Cancelar</button>'
@@ -1151,26 +1175,47 @@ class CMH_Admin {
         global $wpdb; $t = CMH_Core::tables();
         self::page_header( 'Integración Forminator / E2PDF', [ [ 'label' => 'Integración' ] ] );
 
-        echo '<div class="cmh-panel"><h2>Formularios conectados</h2>'
-            . '<table class="widefat cmh"><thead><tr><th>Form ID</th><th>Tipo</th><th>Campo máquina</th><th>Mantenimiento</th><th>Estado</th></tr></thead><tbody>';
-        foreach ( CMH_Integration::config() as $fid => $cfg ) {
-            echo '<tr><td><strong>' . intval( $fid ) . '</strong></td><td>' . esc_html( $cfg['form_type'] ) . '</td>'
-                . '<td><code>' . esc_html( $cfg['machine_field'] ) . '</code></td><td>' . esc_html( $cfg['maintenance_type'] ) . '</td>'
-                . '<td><span class="cmh-badge cmh-status-activa">Activo</span></td></tr>';
+        echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Formularios conectados</h2>'
+            . '<a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-forms' ) ) . '">Administrar formatos</a></div>'
+            . '<table class="widefat cmh"><thead><tr><th>Form ID</th><th>Formato</th><th>Campo máquina</th><th>Mantenimiento</th><th>Estado</th></tr></thead><tbody>';
+        foreach ( CMH_Forms::all() as $fid => $cfg ) {
+            $mfield = $cfg['fields']['machine'] ?? '';
+            echo '<tr><td><strong>' . intval( $fid ) . '</strong></td>'
+                . '<td>' . esc_html( $cfg['label'] ?: $cfg['form_type'] ) . '</td>'
+                . '<td>' . ( $mfield ? '<code>' . esc_html( $mfield ) . '</code>' : '<span style="color:#d63638">sin mapear</span>' ) . '</td>'
+                . '<td>' . esc_html( $cfg['maintenance_type'] ) . '</td>'
+                . '<td>' . ( $cfg['enabled']
+                    ? '<span class="cmh-badge cmh-status-activa">Activo</span>'
+                    : '<span class="cmh-badge" style="background:#f0f0f1;color:#3c434a">Inactivo</span>' ) . '</td></tr>';
         }
         echo '</tbody></table><p style="font-size:12px;color:#646970;margin-top:10px">Forminator captura los envíos, crea la intervención y E2PDF asocia el PDF generado. Si el PDF no aparece de inmediato, WP-Cron lo reintenta 90 s después.</p></div>';
 
         $rows = $wpdb->get_results( "SELECT * FROM {$t['logs']} ORDER BY id DESC LIMIT 100" );
         echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Logs de integración</h2>'
             . '<a class="button" href="' . esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=cm_export_csv&type=logs' ), 'cmh_action' ) ) . '">Exportar CSV</a></div>'
-            . '<table class="widefat cmh"><thead><tr><th>Fecha</th><th>Nivel</th><th>Form</th><th>Máquina</th><th>Mensaje</th></tr></thead><tbody>';
+            . '<table class="widefat cmh"><thead><tr><th>Fecha</th><th>Nivel</th><th>Form</th><th>Máquina</th><th>Mensaje</th><th></th></tr></thead><tbody>';
         foreach ( $rows as $r ) {
             $cls = $r->level === 'error' ? 'cmh-log-error' : ( $r->level === 'success' ? 'cmh-log-ok' : '' );
+
+            // v2.0 — Solo se puede reprocesar lo que guardó el contenido del envío,
+            // que es justamente lo que se registra cuando algo salió mal.
+            $can_retry = $r->payload && in_array( $r->level, [ 'warning', 'error' ], true )
+                && $r->form_id && ! $r->intervention_id;
+
             echo '<tr class="' . $cls . '"><td>' . esc_html( $r->created_at ) . '</td><td>' . esc_html( $r->level ) . '</td>'
                 . '<td>' . esc_html( $r->form_id ?: '—' ) . '</td><td>' . esc_html( $r->machine_code ?: '—' ) . '</td>'
-                . '<td>' . esc_html( $r->message ) . '</td></tr>';
+                . '<td>' . esc_html( $r->message ) . '</td>'
+                . '<td>';
+            if ( $can_retry ) {
+                echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">'
+                    . '<input type="hidden" name="action" value="cm_reprocess_entry">'
+                    . '<input type="hidden" name="log_id" value="' . intval( $r->id ) . '">'
+                    . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                    . '<button class="button button-small" title="Vuelve a procesar este envío con el mapeo actual">Reprocesar</button></form>';
+            }
+            echo '</td></tr>';
         }
-        if ( ! $rows ) echo '<tr><td colspan="5">' . self::empty_state_inline( 'Sin logs todavía.' ) . '</td></tr>';
+        if ( ! $rows ) echo '<tr><td colspan="6">' . self::empty_state_inline( 'Sin logs todavía.' ) . '</td></tr>';
         echo '</tbody></table></div>';
         self::page_footer();
     }
@@ -1758,7 +1803,7 @@ class CMH_Admin {
 
         $tasks = CMH_Tech::tasks_for_machine( $machine_id );
         if ( $tasks ) {
-            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Técnico</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>';
+            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Técnico</th><th>Vence</th><th>Estado</th><th>Formato</th><th></th></tr></thead><tbody>';
             foreach ( $tasks as $ta ) {
                 $tech_name = $ta->assigned_to ? get_the_author_meta( 'display_name', $ta->assigned_to ) : '—';
                 echo '<tr>'
@@ -1768,6 +1813,7 @@ class CMH_Admin {
                     . '<td>' . esc_html( $tech_name ?: '—' ) . '</td>'
                     . '<td>' . esc_html( $ta->due_date ?: '—' ) . '</td>'
                     . '<td>' . CMH_Tech::task_status_badge( $ta->status ) . '</td>'
+                    . '<td>' . CMH_Tech::open_form_control( $ta, $back ) . '</td>'
                     . '<td style="display:flex;gap:6px">'
                     . '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-task-' . intval( $ta->id ) . '">Editar</button>'
                     . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline" onsubmit="return confirm(\'¿Eliminar esta tarea?\')">'
@@ -1779,7 +1825,7 @@ class CMH_Admin {
                     . '<button class="button button-small" style="color:#d63638;border-color:#d63638">Eliminar</button>'
                     . '</form></td></tr>';
                 // Fila de edición inline
-                echo '<tr id="cmh-task-' . intval( $ta->id ) . '" style="display:none"><td colspan="5" style="background:#f6f7f7">';
+                echo '<tr id="cmh-task-' . intval( $ta->id ) . '" style="display:none"><td colspan="6" style="background:#f6f7f7">';
                 self::task_form( $machine_id, $back, $ta );
                 echo '</td></tr>';
             }
@@ -1812,6 +1858,14 @@ class CMH_Admin {
             echo '<option value="' . intval( $u->ID ) . '" ' . selected( $is_edit ? $task->assigned_to : 0, $u->ID, false ) . '>' . esc_html( $u->display_name ) . '</option>';
         echo '</select></label>'
             . '<label>Vence<input type="date" name="due_date" value="' . esc_attr( $is_edit ? ( $task->due_date ?: '' ) : '' ) . '"></label>';
+
+        // v2.0 — Formato que el técnico debe diligenciar. Opcional: si se deja en
+        // «El técnico elige», él escoge cuál al abrir la tarea desde su panel.
+        echo '<label>Formato a diligenciar<select name="form_id"><option value="0">— El técnico elige —</option>';
+        foreach ( CMH_Integration::forms_for_select() as $fid => $flabel )
+            echo '<option value="' . intval( $fid ) . '" ' . selected( $is_edit ? (int) ( $task->form_id ?? 0 ) : 0, $fid, false ) . '>' . esc_html( $flabel ) . '</option>';
+        echo '</select></label>';
+
         if ( $is_edit ) {
             echo '<label>Estado<select name="status">';
             foreach ( CMH_Tech::TASK_STATUSES as $k => $v )
@@ -1819,7 +1873,7 @@ class CMH_Admin {
             echo '</select></label>';
         }
         echo '</div>'
-            . '<label>Notas<textarea name="notes">' . ( $is_edit ? esc_textarea( $task->notes ) : '' ) . '</textarea></label>'
+            . '<label>Notas<textarea name="notes">' . ( $is_edit ? esc_textarea( (string) $task->notes ) : '' ) . '</textarea></label>'
             . '<button class="button button-primary">' . ( $is_edit ? 'Guardar cambios' : 'Crear tarea' ) . '</button></form>';
     }
 
@@ -1846,6 +1900,12 @@ class CMH_Admin {
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Asignación eliminada.' );
     }
 
+    /** v2.0 — Formato elegido para la tarea; null si se deja «el técnico elige». */
+    private static function form_id_from_post() {
+        $id = intval( $_POST['form_id'] ?? 0 );
+        return CMH_Integration::is_valid_form( $id ) ? $id : null;
+    }
+
     public static function save_task() {
         self::check(); global $wpdb; $t = CMH_Core::tables();
         $machine_id = intval( $_POST['machine_id'] );
@@ -1860,6 +1920,7 @@ class CMH_Admin {
             'notes'       => sanitize_textarea_field( $_POST['notes'] ?? '' ),
             'due_date'    => sanitize_text_field( $_POST['due_date'] ?? '' ) ?: null,
             'status'      => 'pendiente',
+            'form_id'     => self::form_id_from_post(),
             'created_by'  => get_current_user_id(),
         ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea creada.' );
@@ -1880,6 +1941,7 @@ class CMH_Admin {
             'notes'       => sanitize_textarea_field( $_POST['notes'] ?? '' ),
             'due_date'    => sanitize_text_field( $_POST['due_date'] ?? '' ) ?: null,
             'status'      => $status,
+            'form_id'     => self::form_id_from_post(),
             'updated_at'  => current_time( 'mysql' ),
         ], [ 'id' => $task_id ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea actualizada.' );

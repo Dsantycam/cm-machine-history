@@ -30,6 +30,7 @@ class CMH_Tech {
         add_action( 'admin_menu', [ __CLASS__, 'admin_menu' ] );
         add_action( 'admin_post_cmh_tech_update_task',   [ __CLASS__, 'tech_update_task' ] );
         add_action( 'admin_post_cmh_tech_save_intervention', [ __CLASS__, 'tech_save_intervention' ] );
+        add_action( 'admin_post_cmh_open_task_form',     [ __CLASS__, 'open_task_form' ] );
     }
 
     public static function admin_menu() {
@@ -75,6 +76,36 @@ class CMH_Tech {
         ) ) );
     }
 
+    /**
+     * v2.0 — IDs de máquina donde el usuario tiene alguna tarea asignada.
+     * Se cuentan las tareas en cualquier estado: la tarea es el registro de que
+     * se le autorizó a operar esa máquina, y no debe perder el acceso justo
+     * después de cerrarla —que es cuando suele querer revisar lo que registró—.
+     */
+    public static function task_machine_ids( $user_id ) {
+        global $wpdb; $t = CMH_Core::tables();
+        return array_map( 'intval', $wpdb->get_col( $wpdb->prepare(
+            "SELECT DISTINCT machine_id FROM {$t['tasks']} WHERE assigned_to=%d", $user_id
+        ) ) );
+    }
+
+    /** v2.0 — Máquinas que el técnico puede abrir: asignadas + las que tiene por tarea. */
+    public static function accessible_machine_ids( $user_id ) {
+        return array_values( array_unique( array_merge(
+            self::assigned_machine_ids( $user_id ),
+            self::task_machine_ids( $user_id )
+        ) ) );
+    }
+
+    /** v2.0 — ¿El usuario tiene alguna tarea asignada en esta máquina? */
+    public static function has_task_on_machine( $machine_id, $user_id ) {
+        global $wpdb; $t = CMH_Core::tables();
+        return (bool) $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM {$t['tasks']} WHERE machine_id=%d AND assigned_to=%d LIMIT 1",
+            $machine_id, $user_id
+        ) );
+    }
+
     /** ¿El usuario está asignado a esta máquina? */
     public static function is_assigned( $machine_id, $user_id ) {
         global $wpdb; $t = CMH_Core::tables();
@@ -85,12 +116,22 @@ class CMH_Tech {
 
     /**
      * ¿El usuario actual puede ver/operar esta máquina en el panel del técnico?
-     * Admins/editores (edit_others_posts) pueden todo; el resto solo lo asignado.
+     *
+     * Admins/editores (edit_others_posts) pueden todo. Para el técnico hay DOS
+     * vías de acceso, y basta con una:
+     *   - estar asignado a la máquina (tabla `assignments`), o
+     *   - tener una tarea asignada en esa máquina (v2.0).
+     *
+     * La segunda vía se agregó porque asignarle una tarea a alguien ya es
+     * autorizarlo a operar esa máquina: antes la tarea aparecía en su panel pero
+     * el botón «Abrir» chocaba contra «No tienes acceso», que es un callejón sin
+     * salida desde el punto de vista del técnico.
      */
     public static function can_access_machine( $machine_id, $user_id = null ) {
         $user_id = $user_id ?: get_current_user_id();
         if ( user_can( $user_id, 'edit_others_posts' ) ) return true;
-        return self::is_assigned( $machine_id, $user_id );
+        return self::is_assigned( $machine_id, $user_id )
+            || self::has_task_on_machine( $machine_id, $user_id );
     }
 
     /** Tareas de una máquina (con nombre del técnico asignado). */
@@ -113,6 +154,114 @@ class CMH_Tech {
              ORDER BY FIELD(ta.status,'en_progreso','pendiente','completada'), ta.due_date IS NULL, ta.due_date ASC, ta.id DESC",
             $user_id
         ) );
+    }
+
+    // =========================================================================
+    // v2.0 — Abrir el formato de Forminator prellenado desde una tarea
+    // =========================================================================
+
+    /**
+     * Botón (o selector) para abrir el formato que corresponde a una tarea.
+     *
+     * Si la tarea trae `form_id`, es un botón directo. Si no —porque quien la creó
+     * no eligió formato—, se ofrece el selector de los tres formatos: es el caso
+     * de las tareas automáticas del cron, que no saben de qué tipo es la máquina.
+     *
+     * @param object $task Fila de la tabla `tasks`.
+     * @param string $back URL a la que volver si algo falta por configurar.
+     */
+    public static function open_form_control( $task, $back = '' ) {
+        $forms = CMH_Integration::forms_for_select();
+        $nonce = wp_create_nonce( 'cmh_action' );
+        $post  = esc_url( admin_url( 'admin-post.php' ) );
+        $fid   = (int) ( $task->form_id ?? 0 );
+
+        // Sin URL configurada no hay a dónde ir: mejor decirlo que dar un botón muerto.
+        $usable = [];
+        foreach ( array_keys( $forms ) as $id ) if ( CMH_Integration::form_url( $id ) ) $usable[] = $id;
+        if ( ! $usable ) {
+            return '<span style="font-size:12px;color:#646970" title="Un administrador debe indicar en qué página vive cada formulario">Formatos sin configurar</span>';
+        }
+
+        if ( $fid && CMH_Integration::is_valid_form( $fid ) && CMH_Integration::form_url( $fid ) ) {
+            $url = wp_nonce_url( admin_url( 'admin-post.php?' . http_build_query( [
+                'action'  => 'cmh_open_task_form',
+                'task_id' => (int) $task->id,
+                'form_id' => $fid,
+                'back'    => $back,
+            ] ) ), 'cmh_action' );
+            return '<a class="button button-small button-primary" target="_blank" rel="noopener" href="' . esc_url( $url ) . '">'
+                . 'Abrir formato</a><br><span style="font-size:11px;color:#646970">'
+                . esc_html( CMH_Integration::form_label( $fid ) ) . '</span>';
+        }
+
+        // Sin formato definido: que el técnico elija cuál diligenciar.
+        $html = '<form method="get" action="' . $post . '" target="_blank" rel="noopener" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+              . '<input type="hidden" name="action" value="cmh_open_task_form">'
+              . '<input type="hidden" name="task_id" value="' . intval( $task->id ) . '">'
+              . '<input type="hidden" name="back" value="' . esc_attr( $back ) . '">'
+              . '<input type="hidden" name="_wpnonce" value="' . $nonce . '">'
+              . '<select name="form_id" required style="max-width:210px"><option value="">— Formato —</option>';
+        foreach ( $forms as $id => $label ) {
+            if ( ! in_array( $id, $usable, true ) ) continue;
+            $html .= '<option value="' . intval( $id ) . '">' . esc_html( $label ) . '</option>';
+        }
+        return $html . '</select><button class="button button-small button-primary">Abrir</button></form>';
+    }
+
+    /**
+     * Abre el formato prellenado: valida acceso, marca la tarea «en progreso» y
+     * redirige a la página del formulario con el código de máquina en la URL.
+     *
+     * El cambio de estado va aquí, del lado del servidor, para que no dependa de
+     * que el técnico se acuerde de moverlo. Solo avanza `pendiente → en_progreso`
+     * y solo si quien abre es el técnico asignado: si abre el administrador para
+     * revisar, o la tarea ya está completada, el estado no se toca.
+     */
+    public static function open_task_form() {
+        if ( ! is_user_logged_in() ) wp_die( 'Sin permisos.' );
+        check_admin_referer( 'cmh_action' );
+
+        global $wpdb; $t = CMH_Core::tables();
+        $task_id = intval( $_GET['task_id'] ?? 0 );
+        $form_id = intval( $_GET['form_id'] ?? 0 );
+        $back    = ! empty( $_GET['back'] ) ? esc_url_raw( wp_unslash( $_GET['back'] ) ) : CMH_Admin::admin_url( 'cmh-tech' );
+
+        $task = $wpdb->get_row( $wpdb->prepare(
+            "SELECT ta.*, m.machine_code FROM {$t['tasks']} ta
+             JOIN {$t['machines']} m ON m.id=ta.machine_id WHERE ta.id=%d",
+            $task_id
+        ) );
+        if ( ! $task ) wp_die( 'Tarea no encontrada.' );
+
+        if ( ! current_user_can( 'edit_others_posts' ) ) {
+            if ( ! current_user_can( 'cmh_tech' ) ) wp_die( 'Sin permisos.' );
+            if ( ! self::can_access_machine( (int) $task->machine_id ) ) wp_die( 'No tienes acceso a esta tarea.' );
+        }
+
+        if ( ! $form_id ) $form_id = (int) $task->form_id;
+        if ( ! CMH_Integration::is_valid_form( $form_id ) ) {
+            CMH_Admin::redirect_to( $back, '', 'Elige un formato válido para abrir.' );
+        }
+
+        $url = CMH_Integration::form_url( $form_id, [
+            'cmh_machine' => $task->machine_code,
+            'cmh_task'    => (int) $task->id,
+        ] );
+        if ( ! $url ) {
+            CMH_Admin::redirect_to( $back, '', 'El formato «' . CMH_Integration::form_label( $form_id )
+                . '» no tiene página configurada. Un administrador debe indicarla en Máquinas → Ajustes.' );
+        }
+
+        if ( $task->status === 'pendiente' && (int) $task->assigned_to === get_current_user_id() ) {
+            $wpdb->update( $t['tasks'],
+                [ 'status' => 'en_progreso', 'updated_at' => current_time( 'mysql' ) ],
+                [ 'id' => (int) $task->id ]
+            );
+        }
+
+        wp_safe_redirect( $url );
+        exit;
     }
 
     public static function task_status_badge( $status ) {
@@ -155,7 +304,9 @@ class CMH_Tech {
                  ORDER BY m.machine_code"
             );
         } else {
-            $ids = self::assigned_machine_ids( $uid );
+            // v2.0 — Incluye también las máquinas que solo tiene por tarea; si no,
+            // la tarea aparecía en el panel pero su máquina no existía para él.
+            $ids = self::accessible_machine_ids( $uid );
             if ( $ids ) {
                 $in = implode( ',', array_map( 'intval', $ids ) );
                 $machines = $wpdb->get_results(
@@ -169,6 +320,7 @@ class CMH_Tech {
                 $machines = [];
             }
         }
+        $assigned_ids = $is_mgr ? [] : self::assigned_machine_ids( $uid );
 
         if ( $is_mgr ) {
             echo '<div class="notice notice-info inline" style="margin:0 0 16px"><p>Estás viendo este panel como administrador (previsualización). Los técnicos solo ven las máquinas que les asignes.</p></div>';
@@ -178,17 +330,20 @@ class CMH_Tech {
         $tasks = self::tasks_for_user( $uid, true );
         echo '<div class="cmh-panel"><h2>Mis tareas pendientes <small style="font-weight:400;font-size:13px;color:#646970">— ' . count( $tasks ) . '</small></h2>';
         if ( $tasks ) {
-            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Máquina</th><th>Vence</th><th>Estado</th><th></th></tr></thead><tbody>';
+            $back = CMH_Admin::admin_url( 'cmh-tech' );
+            echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Máquina</th><th>Vence</th><th>Estado</th><th>Formato</th><th></th></tr></thead><tbody>';
             foreach ( $tasks as $ta ) {
                 echo '<tr>'
                     . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 20 ) ) . '</span>' : '' ) . '</td>'
                     . '<td>' . esc_html( $ta->machine_code ) . '</td>'
                     . '<td>' . self::due_label( $ta->due_date ) . '</td>'
                     . '<td>' . self::task_status_badge( $ta->status ) . '</td>'
-                    . '<td><a class="button button-small" href="' . esc_url( CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $ta->machine_id ] ) ) . '#cmh-tech-tareas">Abrir</a></td>'
+                    . '<td>' . self::open_form_control( $ta, $back ) . '</td>'
+                    . '<td><a class="button button-small" href="' . esc_url( CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $ta->machine_id ] ) ) . '#cmh-tech-tareas">Ver máquina</a></td>'
                     . '</tr>';
             }
-            echo '</tbody></table>';
+            echo '</tbody></table>'
+                . '<p style="font-size:12px;color:#646970;margin:10px 0 0">«Abrir formato» abre el formulario en una pestaña nueva con los datos de la máquina ya cargados. La tarea pasa sola a «En progreso».</p>';
         } else {
             echo '<p style="color:#646970;font-size:13px;margin:4px 0 0">No tienes tareas pendientes. 🎉</p>';
         }
@@ -207,9 +362,12 @@ class CMH_Tech {
                 $open = (int) $wpdb->get_var( $wpdb->prepare(
                     "SELECT COUNT(*) FROM {$t['tasks']} WHERE machine_id=%d AND status<>'completada'", $m->id
                 ) );
-                $url = esc_url( CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $m->id ] ) );
+                $url      = esc_url( CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $m->id ] ) );
+                $by_task  = ! $is_mgr && ! in_array( (int) $m->id, $assigned_ids, true );
                 echo '<tr>'
-                    . '<td><strong>' . esc_html( $m->machine_code ) . '</strong></td>'
+                    . '<td><strong>' . esc_html( $m->machine_code ) . '</strong>'
+                    . ( $by_task ? ' <span class="cmh-badge" style="background:#e7f0f7;color:#2271b1" title="Tienes acceso a esta máquina porque se te asignó una tarea en ella">Por tarea</span>' : '' )
+                    . '</td>'
                     . '<td>' . esc_html( trim( $m->brand . ' ' . $m->model ) ) . '</td>'
                     . '<td style="font-size:12px">' . esc_html( $m->company_name . ' / ' . $m->city_name ) . '</td>'
                     . '<td>' . CMH_Admin::status_badge( $m->status ) . '</td>'
@@ -278,11 +436,38 @@ class CMH_Tech {
         self::render_readonly_interventions( $machine_id );
         echo '</div>';
 
-        echo '</div><div class="cmh-side"><div class="cmh-panel"><h2>Registrar intervención</h2>';
+        echo '</div><div class="cmh-side">';
+
+        // v2.0 — Formatos de esta máquina, prellenados, sin depender de una tarea.
+        self::render_form_links( $m->machine_code );
+
+        echo '<div class="cmh-panel"><h2>Registrar intervención</h2>';
         self::tech_intervention_form( $machine_id, (float) $m->current_hourmeter );
         echo '</div></div></div>';
 
         CMH_Admin::page_footer();
+    }
+
+    /**
+     * v2.0 — Enlaces directos a los tres formatos, ya prellenados con esta máquina.
+     *
+     * No pasa por el handler de tarea porque no hay tarea que mover de estado: es
+     * un enlace limpio a la página del formulario con el código en la URL.
+     */
+    public static function render_form_links( $machine_code ) {
+        $links = [];
+        foreach ( CMH_Integration::forms_for_select() as $id => $label ) {
+            $url = CMH_Integration::form_url( $id, [ 'cmh_machine' => $machine_code ] );
+            if ( ! $url ) continue;
+            $links[] = '<a class="button" style="width:100%;text-align:center;margin-bottom:6px" target="_blank" rel="noopener" href="'
+                . esc_url( $url ) . '">' . esc_html( $label ) . '</a>';
+        }
+        if ( ! $links ) return;
+
+        echo '<div class="cmh-panel"><h2>Diligenciar formato</h2>'
+            . '<p style="font-size:12px;color:#646970;margin:-6px 0 10px">Se abre en una pestaña nueva con los datos de <strong>'
+            . esc_html( $machine_code ) . '</strong> ya cargados.</p>'
+            . implode( '', $links ) . '</div>';
     }
 
     /** Tareas de la máquina, con controles de estado para el técnico. */
@@ -292,12 +477,14 @@ class CMH_Tech {
             echo '<p style="color:#646970;font-size:13px;margin:0">No hay tareas para esta máquina.</p>';
             return;
         }
-        echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Vence</th><th>Estado</th><th>Cambiar estado</th></tr></thead><tbody>';
+        $back = CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $machine_id ] );
+        echo '<table class="widefat cmh"><thead><tr><th>Tarea</th><th>Vence</th><th>Estado</th><th>Formato</th><th>Cambiar estado</th></tr></thead><tbody>';
         foreach ( $tasks as $ta ) {
             echo '<tr>'
                 . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( $ta->notes ) . '</span>' : '' ) . '</td>'
                 . '<td>' . self::due_label( $ta->due_date ) . '</td>'
                 . '<td>' . self::task_status_badge( $ta->status ) . '</td>'
+                . '<td>' . self::open_form_control( $ta, $back ) . '</td>'
                 . '<td><form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:flex;gap:6px;align-items:center">'
                 . '<input type="hidden" name="action" value="cmh_tech_update_task">'
                 . '<input type="hidden" name="task_id" value="' . intval( $ta->id ) . '">'
