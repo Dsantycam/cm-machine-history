@@ -7,7 +7,7 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) exit;
 
 global $wpdb;
 $prefix = $wpdb->prefix . 'cmh_';
-foreach ( [ 'client_cities', 'client_companies', 'tasks', 'assignments', 'logs', 'files', 'interventions', 'machines', 'branches', 'cities', 'companies' ] as $table ) {
+foreach ( [ 'task_time', 'client_cities', 'client_companies', 'tasks', 'assignments', 'logs', 'files', 'interventions', 'machines', 'branches', 'cities', 'companies' ] as $table ) {
     $wpdb->query( "DROP TABLE IF EXISTS {$prefix}{$table}" );
 }
 delete_option( 'cmh_version' );
