@@ -49,9 +49,16 @@ CMH_Reports::init();
 $cmh_puc = CMH_DIR . 'lib/plugin-update-checker/load-v5p7.php';
 if ( file_exists( $cmh_puc ) ) {
     require_once $cmh_puc;
-    \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+    $cmh_checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
         'https://github.com/Dsantycam/cm-machine-history/',
         __FILE__,
         'cm-machine-history'
     );
+
+    // Descargar el ZIP adjunto al release en vez del zipball del código fuente.
+    // Si algún release no trae ZIP adjunto, PUC cae al zipball automáticamente.
+    $cmh_api = $cmh_checker->getVcsApi();
+    if ( method_exists( $cmh_api, 'enableReleaseAssets' ) ) {
+        $cmh_api->enableReleaseAssets( '/^cm-machine-history.*\.zip$/i' );
+    }
 }
