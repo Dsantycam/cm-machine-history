@@ -246,18 +246,16 @@ class CMH_Integration {
         }
 
         // ── Sistema / falla ───────────────────────────────────────────────────
+        // v2.6 — Se guardan TODOS los sistemas marcados, no solo el primero: un
+        // checkbox trae varios y quedarse con uno falseaba la gráfica de averías
+        // por sistema sin avisar de nada.
         $failure_system = '';
         if ( self::slug( $cfg, 'failure_system' ) ) {
-            $raw      = self::field( $data, self::slug( $cfg, 'failure_system' ) );
-            $selected = self::selected_values( $raw );
+            $raw            = self::field( $data, self::slug( $cfg, 'failure_system' ) );
+            $failure_system = CMH_Taxonomy::systems_to_string( self::match_systems( $raw, $cfg ) );
 
-            foreach ( (array) $cfg['system_map'] as $needle => $mapped ) {
-                if ( in_array( self::norm( $needle ), $selected, true ) ) { $failure_system = $mapped; break; }
-            }
-            // Sin traducción explícita, se intenta reconocer contra la taxonomía.
-            if ( ! $failure_system ) $failure_system = self::guess_system( $selected );
-            if ( ! $failure_system && $selected ) {
-                $warnings[] = 'El sistema «' . implode( ', ', $selected ) . '» no se pudo traducir: agrégalo a la tabla de sistemas.';
+            if ( ! $failure_system && self::selected_values( $raw ) ) {
+                $warnings[] = 'El campo de sistema llegó con un valor que no se pudo interpretar.';
             }
         }
 
@@ -424,6 +422,43 @@ class CMH_Integration {
         return strtolower( remove_accents( trim( (string) $v ) ) );
     }
 
+    /**
+     * Todos los sistemas de un envío (v2.6).
+     *
+     * Un checkbox llega como arreglo y un texto puede traer varios separados por
+     * coma. Cada valor se resuelve por su cuenta y en tres pasos: la tabla de
+     * traducción del formato, la taxonomía del plugin, y —si no está en ninguna—
+     * se da de alta. Antes se descartaba, y el reporte salía incompleto en
+     * silencio; el usuario puede renombrarlo luego desde Ajustes.
+     *
+     * @return string[] Claves, sin repetir y en el orden en que llegaron.
+     */
+    private static function match_systems( $raw, $cfg ) {
+        $values = is_array( $raw )
+            ? $raw
+            : preg_split( '/\s*[,;|]\s*/', (string) self::human( $raw ) );
+
+        $out = [];
+        foreach ( (array) $values as $value ) {
+            $value = trim( (string) self::human( $value ) );
+            if ( $value === '' ) continue;
+            $norm = self::norm( $value );
+
+            $slug = '';
+            foreach ( (array) $cfg['system_map'] as $needle => $mapped ) {
+                if ( $mapped !== '' && self::norm( $needle ) === $norm ) { $slug = $mapped; break; }
+            }
+            // Sin traducción explícita se reconoce contra la taxonomía, incluso
+            // por palabras sueltas: «Sistema hidráulico» debe caer en hidraulico
+            // en vez de crear una entrada nueva casi igual.
+            if ( ! $slug ) $slug = self::guess_system( self::selected_values( $value ) );
+            if ( ! $slug ) $slug = CMH_Taxonomy::ensure_system( $value );
+
+            if ( $slug !== '' && ! in_array( $slug, $out, true ) ) $out[] = $slug;
+        }
+        return $out;
+    }
+
     /** Intenta reconocer el sistema contra la taxonomía del plugin. */
     private static function guess_system( $selected ) {
         $systems = CMH_Admin::failure_systems();
@@ -489,7 +524,7 @@ class CMH_Integration {
             'paid_amount'         => $p['paid_amount'],
             'payment_status'      => $p['payment_status'],
             'affects_availability'=> $p['affects'],
-            'failure_system'      => sanitize_text_field( $p['failure_system'] ),
+            'failure_system'      => CMH_Taxonomy::systems_to_string( $p['failure_system'] ),
             'parts'               => sanitize_textarea_field( $p['parts'] ),
             'services'            => sanitize_textarea_field( $p['services'] ),
             'observations'        => sanitize_textarea_field( $p['observations'] ),

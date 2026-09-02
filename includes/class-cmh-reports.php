@@ -509,30 +509,43 @@ class CMH_Reports {
         list( $where, $sparams ) = self::scope( $f );
         $params = array_merge( [ self::date_start( $f ), self::date_end( $f ) ], $sparams );
 
+        // v2.6 — La celda puede traer VARIOS sistemas separados por coma, así que
+        // el GROUP BY de SQL ya no sirve: agruparía «frenos,hidraulico» como si
+        // fuera un sistema propio. Se agrupa aquí, contando la avería en cada uno
+        // de los sistemas que tocó, que es lo que responde «¿qué me está
+        // fallando?». Por eso la suma de las partes puede pasar del total de
+        // averías: una sola avería que toca dos sistemas cuenta en los dos.
         $rows = $wpdb->get_results( $wpdb->prepare(
-            "SELECT COALESCE(NULLIF(i.failure_system,''),'') sistema,
-                    COUNT(*) n,
-                    COALESCE(SUM(i.downtime_hours),0) dt
+            "SELECT COALESCE(i.failure_system,'') sistema,
+                    COALESCE(i.downtime_hours,0) dt
              FROM {$t['interventions']} i
              JOIN {$t['machines']} m ON m.id=i.machine_id
              WHERE i.affects_availability=1
-               AND i.intervention_date BETWEEN %s AND %s $where
-             GROUP BY sistema
-             ORDER BY n DESC",
+               AND i.intervention_date BETWEEN %s AND %s $where",
             $params
         ) );
 
-        $labels = CMH_Admin::failure_systems();
-        $out = [];
+        $acc = [];
         foreach ( $rows as $r ) {
-            $key = (string) $r->sistema;
+            $keys = CMH_Taxonomy::systems_from_string( $r->sistema );
+            if ( ! $keys ) $keys = [ '' ];   // sin especificar
+            foreach ( $keys as $key ) {
+                if ( ! isset( $acc[ $key ] ) ) $acc[ $key ] = [ 'n' => 0, 'dt' => 0.0 ];
+                $acc[ $key ]['n']++;
+                $acc[ $key ]['dt'] += (float) $r->dt;
+            }
+        }
+
+        $out = [];
+        foreach ( $acc as $key => $v ) {
             $out[] = [
-                'key'      => $key,
-                'label'    => $key === '' ? 'Sin especificar' : ( $labels[ $key ] ?? ucfirst( $key ) ),
-                'n'        => (int) $r->n,
-                'downtime' => (float) $r->dt,
+                'key'      => (string) $key,
+                'label'    => $key === '' ? 'Sin especificar' : CMH_Taxonomy::system_label( $key ),
+                'n'        => (int) $v['n'],
+                'downtime' => (float) $v['dt'],
             ];
         }
+        usort( $out, function ( $a, $b ) { return $b['n'] <=> $a['n']; } );
         return $out;
     }
 
@@ -1115,7 +1128,7 @@ class CMH_Reports {
             . '</tr></thead><tbody>';
         $labels = CMH_Admin::failure_systems();
         foreach ( $rows as $r ) {
-            $sys = $r->failure_system ? ( $labels[ $r->failure_system ] ?? ucfirst( $r->failure_system ) ) : '—';
+            $sys = $r->failure_system ? CMH_Taxonomy::systems_label( $r->failure_system ) : '—';
             echo '<tr>'
                 . '<td>' . esc_html( $r->intervention_date ) . '</td>'
                 . '<td><a href="' . esc_url( self::machine_url( (int) $r->machine_id ) ) . '">' . esc_html( $r->machine_code ) . '</a></td>'
