@@ -3,7 +3,7 @@
  * Plugin Name: CM Machine History
  * Plugin URI:  https://santiagocamachomkt.com
  * Description: CMMS para gestión de historial de mantenimiento de maquinaria industrial — montacargas y equipos industriales.
- * Version:     2.2.1
+ * Version:     2.3.0
  * Author:      Santiago Camacho
  * Author URI:  https://santiagocamachomkt.com
  * Text Domain: cm-machine-history
@@ -13,12 +13,13 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'CMH_VERSION', '2.2.1' );
+define( 'CMH_VERSION', '2.3.0' );
 define( 'CMH_SLUG',    'cm-machine-history' );
 define( 'CMH_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'CMH_URL',     plugin_dir_url( __FILE__ ) );
 
 require_once CMH_DIR . 'includes/class-cmh-core.php';
+require_once CMH_DIR . 'includes/class-cmh-taxonomy.php';
 require_once CMH_DIR . 'includes/class-cmh-metrics.php';
 require_once CMH_DIR . 'includes/class-cmh-forms.php';
 require_once CMH_DIR . 'includes/class-cmh-integration.php';
@@ -35,6 +36,7 @@ register_deactivation_hook( __FILE__, [ 'CMH_Core', 'deactivate' ] );
 add_action( 'admin_init', [ 'CMH_Core', 'maybe_upgrade' ] );
 
 CMH_Core::init();
+CMH_Taxonomy::init();
 CMH_Admin::init();
 CMH_Forms::init();
 CMH_Integration::init();

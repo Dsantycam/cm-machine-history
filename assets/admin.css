@@ -339,6 +339,129 @@
 }
 
 /* ── Print ────────────────────────────────────────────────── */
+
+/* ============================================================
+   v2.3 — Ajustes de maquetación
+   Las pantallas fueron ganando columnas y controles hasta que las
+   tablas se desbordaban y los botones se montaban entre sí. Esto NO
+   rediseña nada: contiene lo que se salía y ordena lo que quedó
+   suelto, dejando cada pantalla donde el usuario ya la conoce.
+   ============================================================ */
+
+/* ── Tablas que ya no caben ───────────────────────────────────
+   El desborde se resuelve con scroll DENTRO del panel, no estirando
+   la página: así el resto de la pantalla no se descuadra. */
+.cmh-table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -4px;
+    padding: 0 4px;
+}
+.cmh-table-scroll > table { min-width: 720px; }
+.cmh table { width: 100%; }
+.cmh table td { word-break: break-word; }
+.cmh table th { white-space: nowrap; }
+
+.cmh-nowrap { white-space: nowrap; }
+.cmh-num    { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cmh table th.cmh-num { text-align: right; }
+.cmh-muted  { color: var(--cmh-gray-400); font-size: 12px; }
+.cmh-hint   { font-size: 12px; color: var(--cmh-gray-600); margin: -4px 0 12px; line-height: 1.5; }
+.cmh-hint:last-child { margin-bottom: 0; }
+
+/* Segunda línea discreta bajo una fila, para el detalle largo. */
+.cmh-subrow td {
+    padding-top: 0 !important; border-top: 0 !important;
+    font-size: 12px; color: var(--cmh-gray-600);
+}
+.cmh-subrow:hover { background: transparent !important; }
+
+/* ── Acciones dentro de una celda ─────────────────────────────
+   Antes iban con `display:flex` en el <td>, que rompe el alto de la
+   fila en algunos navegadores y montaba los botones al estrecharse. */
+.cmh-row-actions {
+    white-space: nowrap;
+}
+.cmh-row-actions > * { display: inline-block; vertical-align: middle; }
+.cmh-row-actions form { display: inline-block; margin: 0; }
+.cmh-row-actions .button { margin: 2px 4px 2px 0; }
+.cmh table td form { margin: 0; }
+
+/* ── Badges ───────────────────────────────────────────────────
+   Un badge nunca debe partirse en dos líneas ni empujar la celda. */
+.cmh-badge {
+    display: inline-block; white-space: nowrap; vertical-align: middle;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.cmh-badge-xs { font-size: 10px; padding: 1px 6px; }
+
+/* ── Tarjetas de indicador que llevan a algún sitio ───────────── */
+.cmh-card-link {
+    display: block; text-decoration: none; color: inherit;
+    padding-right: 34px;
+}
+.cmh-card-link:hover,
+.cmh-card-link:focus {
+    color: inherit; box-shadow: var(--cmh-shadow-md);
+    border-color: var(--cmh-primary); outline: none;
+}
+.cmh-card-go {
+    position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+    font-size: 22px; line-height: 1; color: var(--cmh-gray-400);
+    transition: color .15s, transform .15s;
+}
+.cmh-card-link:hover .cmh-card-go { color: var(--cmh-primary); transform: translateY(-50%) translateX(3px); }
+
+/* ── Conmutador de vistas y barra de filtros ──────────────────── */
+.cmh-view-switch { display: flex; gap: 6px; flex-wrap: wrap; }
+.cmh-view-switch .button.active,
+.cmh-tl-filter.active {
+    background: var(--cmh-primary); border-color: var(--cmh-primary); color: #fff;
+}
+.cmh-view-switch .button.active:hover,
+.cmh-tl-filter.active:hover { background: var(--cmh-primary); color: #fff; }
+
+.cmh-filter-bar {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 16px;
+}
+.cmh-filter-label { font-size: 12px; font-weight: 500; color: var(--cmh-gray-600); margin-right: 2px; }
+
+.cmh-filter-form .cmh-form-grid { align-items: end; }
+.cmh-form-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+
+/* ── Formularios en rejilla ───────────────────────────────────
+   Los campos anchos ocupan la fila completa en vez de partir la
+   rejilla en dos contenedores. */
+.cmh-span-all { grid-column: 1 / -1; }
+.cmh-form-grid textarea { width: 100%; }
+.cmh-form-grid label,
+.cmh-filter-form label { min-width: 0; }
+.cmh-form-grid input,
+.cmh-form-grid select,
+.cmh-filter-form input,
+.cmh-filter-form select { max-width: 100%; }
+.cmh-inline-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+
+/* ── Listas configurables de Ajustes ──────────────────────────── */
+.cmh-taxonomy-table td { vertical-align: top; }
+.cmh-taxonomy-table input[type="text"] { min-width: 160px; }
+.cmh-slug {
+    display: inline-block; margin-top: 4px; font-size: 11px;
+    color: var(--cmh-gray-400); background: var(--cmh-gray-50);
+    padding: 1px 6px; border-radius: 4px;
+}
+
+/* ── Pantallas estrechas ──────────────────────────────────────── */
+@media (max-width: 960px) {
+    .cmh-grid { grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); }
+    .cmh-toolbar { align-items: flex-start; }
+}
+@media (max-width: 782px) {
+    .cmh-table-scroll > table { min-width: 640px; }
+    .cmh-card strong { font-size: 22px; }
+    .cmh-form-grid { grid-template-columns: 1fr; }
+}
+
 @media print {
     #adminmenumain, #adminmenuback, #wpadminbar, #wpfooter,
     .cmh-tabs-wrapper, .cmh-hero-actions, .cmh-side,

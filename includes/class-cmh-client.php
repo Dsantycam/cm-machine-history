@@ -622,12 +622,8 @@ class CMH_Client {
         return esc_html( $due_date ) . ' <span style="color:#646970">(en ' . $days . ' d)</span>';
     }
 
+    /** v2.3 — Delegado en la taxonomía configurable. */
     private static function mtype_badge( $type ) {
-        $styles = [ 'preventivo' => 'background:#e6f4ea;color:#1a6630', 'correctivo' => 'background:#fff3cd;color:#7a4f00', 'averia' => 'background:#fce8e8;color:#d63638', 'evaluacion' => 'background:#f0f0f1;color:#3c434a' ];
-        $labels = [ 'preventivo' => 'Preventivo', 'correctivo' => 'Correctivo', 'averia' => 'Avería', 'evaluacion' => 'Evaluación' ];
-        $key    = strtolower( $type );
-        $style  = $styles[ $key ] ?? 'background:#f0f0f1;color:#3c434a';
-        $label  = $labels[ $key ] ?? ucfirst( $type );
-        return '<span class="cmh-badge" style="' . $style . '">' . esc_html( $label ) . '</span>';
+        return CMH_Taxonomy::mtype_badge( $type );
     }
 }
