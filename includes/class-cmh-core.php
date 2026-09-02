@@ -33,21 +33,53 @@ class CMH_Core {
         $c = $wpdb->get_charset_collate();
         $t = self::tables();
 
+        // v2.2 — Empresa: además del nombre y el código, los datos de contacto,
+        // ubicación y facturación que el técnico necesita al llegar y que ahora
+        // pueden viajar prellenados al formulario.
         dbDelta( "CREATE TABLE {$t['companies']} (
-            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-            name       VARCHAR(190)    NOT NULL,
-            code       VARCHAR(20)     NOT NULL,
-            created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            name           VARCHAR(190)    NOT NULL,
+            code           VARCHAR(20)     NOT NULL,
+            contact_name   VARCHAR(190)    NULL,
+            contact_role   VARCHAR(120)    NULL,
+            contact_phone  VARCHAR(60)     NULL,
+            contact_mobile VARCHAR(60)     NULL,
+            contact_email  VARCHAR(190)    NULL,
+            contact2_name  VARCHAR(190)    NULL,
+            contact2_phone VARCHAR(60)     NULL,
+            contact2_email VARCHAR(190)    NULL,
+            address        VARCHAR(190)    NULL,
+            area           VARCHAR(120)    NULL,
+            access_notes   TEXT            NULL,
+            tax_id         VARCHAR(40)     NULL,
+            legal_name     VARCHAR(190)    NULL,
+            billing_email  VARCHAR(190)    NULL,
+            payment_terms  VARCHAR(190)    NULL,
+            created_at     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             UNIQUE KEY code (code)
         ) $c;" );
 
+        // v2.2 — Sucursal: los mismos contactos y ubicación que la empresa, sin
+        // el bloque de facturación (eso se factura a la empresa, no a la sede).
+        // Lo que quede vacío aquí hereda de la empresa al resolver el prellenado.
         dbDelta( "CREATE TABLE {$t['cities']} (
-            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-            company_id BIGINT UNSIGNED NOT NULL,
-            name       VARCHAR(190)    NOT NULL,
-            code       VARCHAR(20)     NOT NULL,
-            created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            company_id     BIGINT UNSIGNED NOT NULL,
+            name           VARCHAR(190)    NOT NULL,
+            code           VARCHAR(20)     NOT NULL,
+            contact_name   VARCHAR(190)    NULL,
+            contact_role   VARCHAR(120)    NULL,
+            contact_phone  VARCHAR(60)     NULL,
+            contact_mobile VARCHAR(60)     NULL,
+            contact_email  VARCHAR(190)    NULL,
+            contact2_name  VARCHAR(190)    NULL,
+            contact2_phone VARCHAR(60)     NULL,
+            contact2_email VARCHAR(190)    NULL,
+            address        VARCHAR(190)    NULL,
+            area           VARCHAR(120)    NULL,
+            access_notes   TEXT            NULL,
+            created_at     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             KEY company_id (company_id)
         ) $c;" );
@@ -155,6 +187,7 @@ class CMH_Core {
             id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             machine_id BIGINT UNSIGNED NOT NULL,
             user_id    BIGINT UNSIGNED NOT NULL,
+            is_primary TINYINT(1)       NOT NULL DEFAULT 0,
             created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             UNIQUE KEY machine_user (machine_id, user_id),
