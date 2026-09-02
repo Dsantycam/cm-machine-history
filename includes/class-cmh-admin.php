@@ -337,8 +337,9 @@ class CMH_Admin {
         $interventions = (int)   $wpdb->get_var( "SELECT COUNT(*) FROM {$t['interventions']}" );
         $preventivos   = (int)   $wpdb->get_var( "SELECT COUNT(*) FROM {$t['interventions']} WHERE maintenance_type='preventivo'" );
         $correctivos   = (int)   $wpdb->get_var( "SELECT COUNT(*) FROM {$t['interventions']} WHERE maintenance_type IN('correctivo','averia')" );
-        $cost_total    = (float) $wpdb->get_var( "SELECT COALESCE(SUM(cost),0) FROM {$t['interventions']}" );
+        $cost_total    = (float) $wpdb->get_var( "SELECT " . CMH_Taxonomy::money_sum_sql( 'cost' ) . " FROM {$t['interventions']}" );
         $por_cobrar_total = (float) $wpdb->get_var( "SELECT " . CMH_Taxonomy::balance_sum_sql() . " FROM {$t['interventions']}" );
+        $en_tramite_total = (float) $wpdb->get_var( "SELECT " . CMH_Taxonomy::quote_sum_sql()   . " FROM {$t['interventions']}" );
         $fleet_avail   = CMH_Metrics::fleet_availability( $month, $year );
         $fleet_mttr    = CMH_Metrics::mttr( 0, $month, $year );
         $month_dt      = (float) $wpdb->get_var( $wpdb->prepare(
@@ -389,6 +390,12 @@ class CMH_Admin {
         self::stat_item( 'MTTR ' . $month_label, CMH_Metrics::fmt_mttr( $fleet_mttr ), self::interv_url( [ 'affects' => 1 ] ) );
         self::stat_item( 'MTBF flota',     CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( 0, 12 ) ) );
         self::stat_item( 'Horas parada ' . $month_label, number_format( $month_dt, 1, ',', '.' ) . ' h', self::interv_url( [ 'affects' => 1 ] ) );
+        // Solo aparece si hay estados marcados «En trámite»: a quien no cotiza
+        // no se le mete un indicador en cero que no significa nada.
+        if ( CMH_Taxonomy::quote_pstates() ) {
+            self::stat_item( 'En trámite', '$' . number_format( $en_tramite_total, 0, ',', '.' ),
+                self::interv_url( [ 'pay' => 'quote' ] ) );
+        }
         echo '</div>';
 
         // v2.0 — Tendencia gráfica de la flota (disponibilidad, mezcla y costos).
@@ -791,7 +798,7 @@ class CMH_Admin {
         self::page_header( $m->machine_code, $crumbs );
 
         $stats = $wpdb->get_row( $wpdb->prepare(
-            "SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN affects_availability=1 THEN downtime_hours ELSE 0 END),0) downtime_averia, COALESCE(SUM(CASE WHEN affects_availability=0 THEN downtime_hours ELSE 0 END),0) downtime_maintenance, COALESCE(SUM(cost),0) cost, " . CMH_Taxonomy::balance_sum_sql() . " por_cobrar, SUM(CASE WHEN maintenance_type='preventivo' THEN 1 ELSE 0 END) preventivos, SUM(CASE WHEN maintenance_type IN('correctivo','averia') THEN 1 ELSE 0 END) correctivos FROM {$t['interventions']} WHERE machine_id=%d",
+            "SELECT COUNT(*) total, COALESCE(SUM(CASE WHEN affects_availability=1 THEN downtime_hours ELSE 0 END),0) downtime_averia, COALESCE(SUM(CASE WHEN affects_availability=0 THEN downtime_hours ELSE 0 END),0) downtime_maintenance, " . CMH_Taxonomy::money_sum_sql( 'cost' ) . " cost, " . CMH_Taxonomy::balance_sum_sql() . " por_cobrar, " . CMH_Taxonomy::quote_sum_sql() . " en_tramite, SUM(CASE WHEN maintenance_type='preventivo' THEN 1 ELSE 0 END) preventivos, SUM(CASE WHEN maintenance_type IN('correctivo','averia') THEN 1 ELSE 0 END) correctivos FROM {$t['interventions']} WHERE machine_id=%d",
             $machine_id
         ) );
         $last = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['interventions']} WHERE machine_id=%d ORDER BY intervention_date DESC, id DESC LIMIT 1", $machine_id ) );
@@ -886,6 +893,10 @@ class CMH_Admin {
         self::stat_item( 'Preventivos',      (int) $stats->preventivos, $mu( [ 'type' => 'preventivo' ] ) );
         self::stat_item( 'Correctivos/Averías', (int) $stats->correctivos, $mu( [ 'affects' => 1 ] ) );
         self::stat_item( 'H. parada averías', number_format( (float) $stats->downtime_averia, 1, ',', '.' ) . ' h', $mu( [ 'affects' => 1 ] ) );
+        if ( CMH_Taxonomy::quote_pstates() ) {
+            self::stat_item( 'En trámite', '$' . number_format( (float) $stats->en_tramite, 0, ',', '.' ),
+                $mu( [ 'pay' => 'quote' ] ) );
+        }
         self::stat_item( 'MTTR',            CMH_Metrics::fmt_mttr( $mttr_all ) );
         self::stat_item( 'MTBF',            CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( $machine_id, 12 ) ) );
         self::stat_item( 'Horómetro',       number_format( (float) $m->current_hourmeter, 1, ',', '.' ) . ' h' );
@@ -1248,8 +1259,11 @@ class CMH_Admin {
      * @return array{0:string,1:float} [ estado, abonado ]
      */
     public static function normalize_payment( $status, $cost, $paid ) {
-        $cost   = max( 0, (float) $cost );
-        $paid   = max( 0, (float) $paid );
+        // Los ceros van como 0.0 y no como 0: max() devuelve el primer argumento
+        // cuando empatan, y un entero suelto en el camino del dinero termina
+        // saliendo por la API con otro tipo del que tienen los demás importes.
+        $cost   = max( 0.0, (float) $cost );
+        $paid   = max( 0.0, (float) $paid );
         $status = sanitize_key( $status );
 
         $states = CMH_Taxonomy::pstates();
@@ -1259,6 +1273,15 @@ class CMH_Admin {
 
         if ( 'paid' === $money ) return [ $status, $cost ];
         if ( 'void' === $money ) return [ $status, min( $paid, $cost ) ];
+
+        // En trámite es una etapa del proceso, no un monto derivado: se respeta
+        // lo que haya abonado (raro, pero un anticipo puede existir) y no se
+        // autocorrige a otro estado aunque el abono cubra el costo.
+        if ( 'quote' === $money ) return [ $status, min( $paid, $cost ) ];
+
+        // «No contabilizar» tampoco se autocorrige: lo que el usuario escribió
+        // queda tal cual, simplemente no entra en ninguna suma.
+        if ( 'ignore' === $money ) return [ $status, min( $paid, $cost ) ];
 
         // Comportamiento histórico de los dos estados de siempre.
         if ( 'pendiente' === $status ) return [ 'pendiente', 0.0 ];
@@ -1292,10 +1315,17 @@ class CMH_Admin {
         $money  = CMH_Taxonomy::pstate_money( $status );
         $saldo  = max( 0, $cost - $paid );
 
-        // El saldo solo se muestra cuando de verdad se espera cobrarlo.
-        $extra = ( $money === 'pending' && $saldo > 0 )
-            ? ' <span style="color:#646970;font-size:11px;white-space:nowrap">Saldo $' . number_format( $saldo, 0, ',', '.' ) . '</span>'
-            : '';
+        // El saldo solo se muestra cuando de verdad se espera cobrarlo. Lo que
+        // está en trámite lleva su propia palabra: es un monto cotizado, no una
+        // deuda, y llamarlo «saldo» haría creer que el cliente ya lo debe.
+        $extra = '';
+        if ( $saldo > 0 && $money === 'pending' ) {
+            $extra = ' <span style="color:#646970;font-size:11px;white-space:nowrap">Saldo $' . number_format( $saldo, 0, ',', '.' ) . '</span>';
+        } elseif ( $saldo > 0 && $money === 'quote' ) {
+            $extra = ' <span style="color:#646970;font-size:11px;white-space:nowrap">Cotizado $' . number_format( $saldo, 0, ',', '.' ) . '</span>';
+        } elseif ( $money === 'ignore' ) {
+            $extra = ' <span style="color:#646970;font-size:11px;white-space:nowrap">No se contabiliza</span>';
+        }
 
         return CMH_Taxonomy::pstate_badge( $status ) . $extra;
     }
@@ -1351,13 +1381,14 @@ class CMH_Admin {
 
         // El filtro de dinero se arma con la taxonomía, no con nombres fijos.
         if ( $f['pay'] === 'pending' ) {
-            $w[] = 'i.cost > i.paid_amount' . CMH_Taxonomy::not_void_sql( 'i.' );
+            // Lo mismo que suma el KPI: ni anulado ni en trámite.
+            $w[] = 'i.cost > i.paid_amount' . CMH_Taxonomy::not_billable_sql( 'i.' );
         } elseif ( $f['pay'] === 'paid' ) {
             $w[] = 'i.cost > 0 AND i.paid_amount >= i.cost';
-        } elseif ( $f['pay'] === 'void' ) {
-            $void = CMH_Taxonomy::void_pstates();
-            $w[]  = $void
-                ? 'i.payment_status IN (' . implode( ',', array_map( function ( $s ) { return "'" . esc_sql( $s ) . "'"; }, $void ) ) . ')'
+        } elseif ( $f['pay'] === 'void' || $f['pay'] === 'quote' ) {
+            $states = ( $f['pay'] === 'void' ) ? CMH_Taxonomy::void_pstates() : CMH_Taxonomy::quote_pstates();
+            $w[]    = $states
+                ? 'i.payment_status IN (' . implode( ',', array_map( function ( $s ) { return "'" . esc_sql( $s ) . "'"; }, $states ) ) . ')'
                 : '1=0';
         }
 
@@ -1387,8 +1418,9 @@ class CMH_Admin {
         );
 
         $totals = $wpdb->get_row(
-            "SELECT COUNT(DISTINCT i.id) n, COALESCE(SUM(i.cost),0) cost, "
-            . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " saldo
+            "SELECT COUNT(DISTINCT i.id) n, " . CMH_Taxonomy::money_sum_sql( 'cost', 'i.' ) . " cost, "
+            . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " saldo, "
+            . CMH_Taxonomy::quote_sum_sql( 'i.' ) . " en_tramite
              FROM {$t['interventions']} i
              LEFT JOIN {$t['machines']} m ON m.id = i.machine_id
              $where"
@@ -1400,6 +1432,10 @@ class CMH_Admin {
         self::metric_card( 'Costo', '$' . number_format( (float) ( $totals->cost ?? 0 ), 0, ',', '.' ), 'suma del filtro', 'blue' );
         self::metric_card( 'Por cobrar', '$' . number_format( (float) ( $totals->saldo ?? 0 ), 0, ',', '.' ),
             'saldo del filtro', ( (float) ( $totals->saldo ?? 0 ) ) > 0 ? 'warn' : 'ok' );
+        if ( CMH_Taxonomy::quote_pstates() ) {
+            self::metric_card( 'En trámite', '$' . number_format( (float) ( $totals->en_tramite ?? 0 ), 0, ',', '.' ),
+                'cotizado, sin aprobar', 'blue' );
+        }
         echo '</div>';
 
         self::interv_filter_bar( $f );
@@ -1463,6 +1499,9 @@ class CMH_Admin {
             . '<option value="">— Todo —</option>'
             . '<option value="pending" ' . selected( $f['pay'], 'pending', false ) . '>Con saldo por cobrar</option>'
             . '<option value="paid" ' . selected( $f['pay'], 'paid', false ) . '>Cobradas</option>'
+            . ( CMH_Taxonomy::quote_pstates()
+                ? '<option value="quote" ' . selected( $f['pay'], 'quote', false ) . '>En trámite (cotizadas)</option>'
+                : '' )
             . '<option value="void" ' . selected( $f['pay'], 'void', false ) . '>Anuladas</option>'
             . '</select></label>'
             . '<label>Empresa<select name="company_id"><option value="0">— Todas —</option>';

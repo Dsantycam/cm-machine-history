@@ -519,10 +519,13 @@ class CMH_Client {
         $loc       = $m->company_name . ' / ' . $m->city_name;
 
         $stats = $wpdb->get_row( $wpdb->prepare(
+            // El saldo sale del mismo sitio que el del admin: esta pantalla tenía
+            // su propia fórmula cruda y por eso le seguía contando al cliente lo
+            // anulado, y ahora le contaría también lo cotizado y lo no contable.
             "SELECT COUNT(*) total,
-                    COALESCE(SUM(cost),0) costo,
-                    COALESCE(SUM(paid_amount),0) pagado,
-                    COALESCE(SUM(CASE WHEN cost>paid_amount THEN cost-paid_amount ELSE 0 END),0) por_cobrar
+                    " . CMH_Taxonomy::money_sum_sql( 'cost' ) . " costo,
+                    " . CMH_Taxonomy::money_sum_sql( 'paid_amount' ) . " pagado,
+                    " . CMH_Taxonomy::balance_sum_sql() . " por_cobrar
              FROM {$t['interventions']} WHERE machine_id=%d",
             $machine_id
         ) );

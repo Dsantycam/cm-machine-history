@@ -138,7 +138,7 @@ class CMH_Core {
             worked_hours         DECIMAL(10,2)   DEFAULT 0,
             downtime_hours       DECIMAL(10,2)   DEFAULT 0,
             cost                 DECIMAL(14,2)   DEFAULT 0,
-            payment_status       VARCHAR(20)     NOT NULL DEFAULT 'pendiente',
+            payment_status       VARCHAR(64)     NOT NULL DEFAULT 'pendiente',
             paid_amount          DECIMAL(14,2)   NOT NULL DEFAULT 0,
             affects_availability TINYINT(1)      NOT NULL DEFAULT 0,
             failure_system       VARCHAR(190)    NULL,
@@ -371,7 +371,7 @@ class CMH_Core {
         // v0.10.1 — Columnas de control de pago en intervenciones.
         $colp = $wpdb->get_row( "SHOW COLUMNS FROM {$t['interventions']} LIKE 'payment_status'" );
         if ( ! $colp ) {
-            $wpdb->query( "ALTER TABLE {$t['interventions']} ADD COLUMN payment_status VARCHAR(20) NOT NULL DEFAULT 'pendiente' AFTER cost" );
+            $wpdb->query( "ALTER TABLE {$t['interventions']} ADD COLUMN payment_status VARCHAR(64) NOT NULL DEFAULT 'pendiente' AFTER cost" );
             $wpdb->query( "ALTER TABLE {$t['interventions']} ADD COLUMN paid_amount DECIMAL(14,2) NOT NULL DEFAULT 0 AFTER payment_status" );
         }
 
@@ -392,6 +392,15 @@ class CMH_Core {
         $colf = $wpdb->get_row( "SHOW COLUMNS FROM {$t['tasks']} LIKE 'form_id'" );
         if ( ! $colf ) {
             $wpdb->query( "ALTER TABLE {$t['tasks']} ADD COLUMN form_id BIGINT UNSIGNED NULL DEFAULT NULL AFTER source" );
+        }
+
+        // v2.5 — payment_status nació como VARCHAR(20), cuando los tres estados
+        // eran fijos y cortos. Desde la v2.3 el usuario los crea a su gusto y los
+        // slugs se generan hasta de 40 caracteres: «pendiente_de_cotizacion» son
+        // 23 y NO CABÍA, así que la intervención no se guardaba. Se ensancha a 64.
+        $colps = $wpdb->get_row( "SHOW COLUMNS FROM {$t['interventions']} LIKE 'payment_status'" );
+        if ( $colps && stripos( $colps->Type, 'varchar(20)' ) !== false ) {
+            $wpdb->query( "ALTER TABLE {$t['interventions']} MODIFY COLUMN payment_status VARCHAR(64) NOT NULL DEFAULT 'pendiente'" );
         }
 
         // v1.0.1 — Concilia las intervenciones marcadas «Pagado» que quedaron con

@@ -100,6 +100,8 @@ class CMH_Reports {
             'costo_total'  => [ 'admin' => 'Costo total',    'client' => 'Total facturado' ],
             'costo'        => [ 'admin' => 'Costo',          'client' => 'Facturado' ],
             'por_cobrar'   => [ 'admin' => 'Por cobrar',     'client' => 'Pendiente por pagar' ],
+            'en_tramite'   => [ 'admin' => 'En trámite',     'client' => 'Cotizado, sin aprobar' ],
+            'tramite_hint' => [ 'admin' => 'cotizado, sin aprobar', 'client' => 'todavía no se te cobra' ],
             'saldo_hint'   => [ 'admin' => 'saldo pendiente','client' => 'saldo a tu cargo' ],
             'pagado'       => [ 'admin' => 'Cobrado',        'client' => 'Pagado' ],
             'machines'     => [ 'admin' => 'Máquinas',       'client' => 'Equipos' ],
@@ -279,9 +281,10 @@ class CMH_Reports {
                     COALESCE(SUM(i.maintenance_type='evaluacion'),0) evaluaciones,
                     COALESCE(SUM(CASE WHEN i.affects_availability=1 THEN i.downtime_hours ELSE 0 END),0) dt_averia,
                     COALESCE(SUM(i.downtime_hours),0) dt_total,
-                    COALESCE(SUM(i.cost),0) costo,
-                    COALESCE(SUM(i.paid_amount),0) pagado,
-                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
+                    " . CMH_Taxonomy::money_sum_sql( 'cost', 'i.' ) . " costo,
+                    " . CMH_Taxonomy::money_sum_sql( 'paid_amount', 'i.' ) . " pagado,
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar,
+                    " . CMH_Taxonomy::quote_sum_sql( 'i.' ) . " en_tramite
              FROM {$t['interventions']} i
              JOIN {$t['machines']} m ON m.id=i.machine_id
              WHERE i.intervention_date BETWEEN %s AND %s $where",
@@ -302,9 +305,10 @@ class CMH_Reports {
                     COALESCE(SUM(i.maintenance_type='preventivo'),0) preventivos,
                     COALESCE(SUM(i.maintenance_type IN('correctivo','averia')),0) correctivos,
                     COUNT(*) total,
-                    COALESCE(SUM(i.cost),0) costo,
-                    COALESCE(SUM(i.paid_amount),0) pagado,
-                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
+                    " . CMH_Taxonomy::money_sum_sql( 'cost', 'i.' ) . " costo,
+                    " . CMH_Taxonomy::money_sum_sql( 'paid_amount', 'i.' ) . " pagado,
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar,
+                    " . CMH_Taxonomy::quote_sum_sql( 'i.' ) . " en_tramite
              FROM {$t['interventions']} i
              JOIN {$t['machines']} m ON m.id=i.machine_id
              WHERE i.intervention_date BETWEEN %s AND %s $where
@@ -334,6 +338,7 @@ class CMH_Reports {
                 'costo'        => $r ? (float) $r->costo       : 0.0,
                 'pagado'       => $r ? (float) $r->pagado      : 0.0,
                 'por_cobrar'   => $r ? (float) $r->por_cobrar  : 0.0,
+                'en_tramite'   => $r ? (float) $r->en_tramite  : 0.0,
                 'mttr'         => $av > 0 ? round( $dt / $av, 2 ) : null,
                 'mtbf'         => $av > 0 && $sched > 0 ? round( max( 0, $sched - $dt ) / $av, 2 ) : null,
             ];
@@ -383,9 +388,10 @@ class CMH_Reports {
                     COALESCE(SUM(i.maintenance_type='preventivo'),0) preventivos,
                     COALESCE(SUM(i.maintenance_type IN('correctivo','averia')),0) correctivos,
                     COUNT(i.id) total,
-                    COALESCE(SUM(i.cost),0) costo,
-                    COALESCE(SUM(i.paid_amount),0) pagado,
-                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
+                    " . CMH_Taxonomy::money_sum_sql( 'cost', 'i.' ) . " costo,
+                    " . CMH_Taxonomy::money_sum_sql( 'paid_amount', 'i.' ) . " pagado,
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar,
+                    " . CMH_Taxonomy::quote_sum_sql( 'i.' ) . " en_tramite
              FROM {$t['machines']} m
              $join
              LEFT JOIN {$t['interventions']} i
@@ -426,6 +432,7 @@ class CMH_Reports {
                 'costo'        => (float) $r->costo,
                 'pagado'       => (float) $r->pagado,
                 'por_cobrar'   => (float) $r->por_cobrar,
+                'en_tramite'   => (float) $r->en_tramite,
             ];
         }
         return $out;
@@ -446,9 +453,10 @@ class CMH_Reports {
                     COALESCE(SUM(i.affects_availability=1),0) averias,
                     COALESCE(SUM(i.maintenance_type='preventivo'),0) preventivos,
                     COUNT(i.id) total,
-                    COALESCE(SUM(i.cost),0) costo,
-                    COALESCE(SUM(i.paid_amount),0) pagado,
-                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar
+                    " . CMH_Taxonomy::money_sum_sql( 'cost', 'i.' ) . " costo,
+                    " . CMH_Taxonomy::money_sum_sql( 'paid_amount', 'i.' ) . " pagado,
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar,
+                    " . CMH_Taxonomy::quote_sum_sql( 'i.' ) . " en_tramite
              FROM {$t['machines']} m
              JOIN {$t['companies']} co ON co.id=m.company_id
              JOIN {$t['cities']}    ci ON ci.id=m.city_id
@@ -481,6 +489,7 @@ class CMH_Reports {
                 'costo'        => (float) $r->costo,
                 'pagado'       => (float) $r->pagado,
                 'por_cobrar'   => (float) $r->por_cobrar,
+                'en_tramite'   => (float) $r->en_tramite,
             ];
         }
 
@@ -788,6 +797,10 @@ class CMH_Reports {
         CMH_Admin::metric_card( self::L( 'pagado' ),      self::money( $totals->pagado ), 'en el periodo', 'ok' );
         CMH_Admin::metric_card( self::L( 'por_cobrar' ),  self::money( $totals->por_cobrar ),
             self::L( 'saldo_hint' ), (float) $totals->por_cobrar > 0 ? 'warn' : 'ok' );
+        if ( CMH_Taxonomy::quote_pstates() ) {
+            CMH_Admin::metric_card( self::L( 'en_tramite' ), self::money( $totals->en_tramite ),
+                self::L( 'tramite_hint' ), 'blue' );
+        }
         echo '</div>';
     }
 
@@ -889,12 +902,22 @@ class CMH_Reports {
         CMH_Admin::metric_card( self::L( 'pagado' ),      self::money( $totals->pagado ), 'periodo', 'ok' );
         CMH_Admin::metric_card( self::L( 'por_cobrar' ),  self::money( $totals->por_cobrar ),
             self::L( 'saldo_hint' ), (float) $totals->por_cobrar > 0 ? 'warn' : 'ok' );
+        if ( CMH_Taxonomy::quote_pstates() ) {
+            CMH_Admin::metric_card( self::L( 'en_tramite' ), self::money( $totals->en_tramite ),
+                self::L( 'tramite_hint' ), 'blue' );
+        }
         CMH_Admin::metric_card( 'Costo promedio', self::money( $prom ), 'por intervención', 'blue' );
         echo '</div>';
+
+        // La columna de trámite solo existe si el usuario configuró estados así;
+        // la condición es la misma en el encabezado y en las filas, o la tabla
+        // se descuadra.
+        $con_tramite = (bool) CMH_Taxonomy::quote_pstates();
 
         echo '<table class="widefat cmh" style="margin-top:16px"><thead><tr>'
             . '<th>Mes</th><th>Intervenciones</th><th>' . esc_html( self::L( 'costo' ) ) . '</th>'
             . '<th>' . esc_html( self::L( 'pagado' ) ) . '</th><th>' . esc_html( self::L( 'por_cobrar' ) ) . '</th>'
+            . ( $con_tramite ? '<th>' . esc_html( self::L( 'en_tramite' ) ) . '</th>' : '' )
             . '</tr></thead><tbody>';
         foreach ( $series as $p ) {
             echo '<tr>'
@@ -905,6 +928,7 @@ class CMH_Reports {
                 . '<td>' . ( $p['por_cobrar'] > 0
                     ? '<span style="color:#d63638">' . esc_html( self::money( $p['por_cobrar'] ) ) . '</span>'
                     : esc_html( self::money( 0 ) ) ) . '</td>'
+                . ( $con_tramite ? '<td>' . esc_html( self::money( $p['en_tramite'] ) ) . '</td>' : '' )
                 . '</tr>';
         }
         echo '</tbody></table></div>';
@@ -977,11 +1001,14 @@ class CMH_Reports {
                 . '. El CSV incluye todos.</p>';
         }
 
+        $con_tramite = (bool) CMH_Taxonomy::quote_pstates();
+
         echo '<table class="widefat cmh" style="margin-top:16px"><thead><tr>'
             . '<th>' . esc_html( $label ) . '</th><th>' . esc_html( self::L( 'machines' ) ) . '</th>'
             . '<th>Disponibilidad</th><th>MTTR</th><th>MTBF</th><th>Intervenciones</th><th>Preventivos</th>'
             . '<th>Averías</th><th>H. parada</th><th>' . esc_html( self::L( 'costo' ) ) . '</th>'
             . '<th>' . esc_html( self::L( 'por_cobrar' ) ) . '</th>'
+            . ( $con_tramite ? '<th>' . esc_html( self::L( 'en_tramite' ) ) . '</th>' : '' )
             . '</tr></thead><tbody>';
 
         foreach ( $groups as $g ) {
@@ -1010,6 +1037,7 @@ class CMH_Reports {
                 . '<td>' . esc_html( self::hours( $g['downtime'] ) ) . '</td>'
                 . '<td>' . esc_html( self::money( $g['costo'] ) ) . '</td>'
                 . '<td>' . esc_html( self::money( $g['por_cobrar'] ) ) . '</td>'
+                . ( $con_tramite ? '<td>' . esc_html( self::money( $g['en_tramite'] ) ) . '</td>' : '' )
                 . '</tr>';
         }
         echo '</tbody></table></div>';
@@ -1417,13 +1445,14 @@ class CMH_Reports {
             case 'costs':
                 $scope = self::scope_totals( $f );
                 CMH_Admin::csv_headers( 'reporte-costos-' . $stamp . '.csv' );
-                CMH_Admin::csv_row( [ 'Mes', 'Intervenciones', 'Costo', 'Pagado', 'Saldo' ] );
+                CMH_Admin::csv_row( [ 'Mes', 'Intervenciones', 'Costo', 'Pagado', 'Saldo', 'En trámite' ] );
                 foreach ( self::monthly_series( $f, $scope['sched'] ) as $p ) {
                     CMH_Admin::csv_row( [
                         $p['label'], $p['total'],
                         number_format( $p['costo'], 2, ',', '' ),
                         number_format( $p['pagado'], 2, ',', '' ),
                         number_format( $p['por_cobrar'], 2, ',', '' ),
+                        number_format( $p['en_tramite'], 2, ',', '' ),
                     ] );
                 }
                 break;
@@ -1447,7 +1476,7 @@ class CMH_Reports {
                 if ( ! $dim ) $dim = 'company';
                 CMH_Admin::csv_headers( 'reporte-' . $dim . '-' . $stamp . '.csv' );
                 CMH_Admin::csv_row( [ self::dimensions()[ $dim ], 'Máquinas', 'Disponibilidad %', 'MTTR h', 'MTBF h',
-                    'Intervenciones', 'Preventivos', 'Averías', 'Horas parada', 'Costo', 'Pagado', 'Saldo' ] );
+                    'Intervenciones', 'Preventivos', 'Averías', 'Horas parada', 'Costo', 'Pagado', 'Saldo', 'En trámite' ] );
                 foreach ( self::by_dimension( $f, $dim ) as $g ) {
                     CMH_Admin::csv_row( [
                         $g['name'], $g['machines'],
@@ -1459,6 +1488,7 @@ class CMH_Reports {
                         number_format( $g['costo'], 2, ',', '' ),
                         number_format( $g['pagado'], 2, ',', '' ),
                         number_format( $g['por_cobrar'], 2, ',', '' ),
+                        number_format( $g['en_tramite'], 2, ',', '' ),
                     ] );
                 }
                 break;
@@ -1475,7 +1505,7 @@ class CMH_Reports {
             default:
                 CMH_Admin::csv_headers( 'reporte-maquinas-' . $stamp . '.csv' );
                 CMH_Admin::csv_row( [ 'Código', 'Equipo', 'Ubicación', 'Estado', 'Disponibilidad %', 'MTTR h', 'MTBF h',
-                    'Intervenciones', 'Preventivos', 'Averías', 'Horas parada', 'Costo', 'Pagado', 'Saldo' ] );
+                    'Intervenciones', 'Preventivos', 'Averías', 'Horas parada', 'Costo', 'Pagado', 'Saldo', 'En trámite' ] );
                 foreach ( self::machine_ranking( $f ) as $r ) {
                     CMH_Admin::csv_row( [
                         $r['machine_code'], $r['equipo'], $r['ubicacion'], $r['status'],
@@ -1487,6 +1517,7 @@ class CMH_Reports {
                         number_format( $r['costo'], 2, ',', '' ),
                         number_format( $r['pagado'], 2, ',', '' ),
                         number_format( $r['por_cobrar'], 2, ',', '' ),
+                        number_format( $r['en_tramite'], 2, ',', '' ),
                     ] );
                 }
                 break;
