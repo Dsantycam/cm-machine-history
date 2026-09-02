@@ -1050,7 +1050,7 @@ class CMH_Forms {
     private static function map_rows( $name, $current, $options, $left, $right ) {
         $rows = [];
         foreach ( (array) $current as $k => $v ) $rows[] = [ $k, $v ];
-        for ( $i = 0; $i < 3; $i++ ) $rows[] = [ '', '' ];
+        for ( $i = 0; $i < 20; $i++ ) $rows[] = [ '', '' ];
 
         echo '<table class="widefat cmh"><thead><tr><th style="width:50%">' . esc_html( $left ) . '</th><th>' . esc_html( $right ) . '</th></tr></thead><tbody>';
         foreach ( $rows as $i => $row ) {
@@ -1072,7 +1072,7 @@ class CMH_Forms {
     private static function rule_rows( $current, $fields ) {
         $rows = [];
         foreach ( (array) $current as $r ) $rows[] = $r;
-        for ( $i = 0; $i < 3; $i++ ) $rows[] = [ 'field' => '', 'op' => 'equals', 'value' => '', 'type' => '' ];
+        for ( $i = 0; $i < 15; $i++ ) $rows[] = [ 'field' => '', 'op' => 'equals', 'value' => '', 'type' => '' ];
 
         echo '<table class="widefat cmh"><thead><tr>'
             . '<th style="width:34px">#</th><th>Si el campo…</th><th style="width:150px">…cumple que…</th>'
@@ -1117,7 +1117,7 @@ class CMH_Forms {
                 'text'   => $literal ? substr( $source, 8 ) : '',
             ];
         }
-        for ( $i = 0; $i < 5; $i++ ) $rows[] = [ 'slug' => '', 'source' => '', 'text' => '' ];
+        for ( $i = 0; $i < 30; $i++ ) $rows[] = [ 'slug' => '', 'source' => '', 'text' => '' ];
 
         echo '<table class="widefat cmh"><thead><tr>'
             . '<th style="width:40%">Campo del formulario</th><th>Se llena con</th>'
