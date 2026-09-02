@@ -78,13 +78,21 @@
     };
 
     function syncMtype() {
-        var val = $mtype.val();
+        var val     = $mtype.val();
+        // v2.3 — Los tipos son configurables, así que la regla ya no se decide por
+        // el nombre: cada opción trae marcado si descuenta disponibilidad.
+        var affects = $mtype.find('option:selected').data('affects') === 1;
+        var known   = $mtype.find('option:selected').length > 0;
 
         // Afecta disponibilidad
-        if (val === 'averia') {
+        if (affects) {
             $avCheck.prop('checked', true).prop('disabled', true);
             $avRow.find('.cmh-auto-note').show();
-        } else if (val === 'preventivo' || val === 'evaluacion') {
+        } else if (val === 'correctivo') {
+            // «Correctivo» conserva su matiz histórico: lo decide el usuario.
+            $avCheck.prop('disabled', false);
+            $avRow.find('.cmh-auto-note').hide();
+        } else if (known) {
             $avCheck.prop('checked', false).prop('disabled', true);
             $avRow.find('.cmh-auto-note').show();
         } else {
@@ -92,17 +100,15 @@
             $avRow.find('.cmh-auto-note').hide();
         }
 
-        // Campos de parada
-        $dtFields.toggle(val === 'averia' || val === 'correctivo');
+        // Campos de parada: se piden cuando descuenta disponibilidad, y en correctivo.
+        $dtFields.toggle(affects || val === 'correctivo');
 
-        // Sugerencia de estado
-        var suggested = statusSuggestions[val] || '';
-        if (suggested && $statusRow.length) {
+        // Sugerencia de estado de la máquina
+        var suggested = statusSuggestions[val];
+        if (suggested === undefined) suggested = affects ? 'mantenimiento' : '';
+        if ($statusRow.length) {
             $statusRow.show();
-            $statusRow.find('select[name="new_machine_status"]').val(suggested);
-        } else if ($statusRow.length) {
-            $statusRow.show();
-            $statusRow.find('select[name="new_machine_status"]').val('');
+            $statusRow.find('select[name="new_machine_status"]').val(suggested || '');
         }
     }
 
@@ -262,6 +268,18 @@
     $(function () {
         $('.cmh-rule-op').each(function () { syncRuleRow($(this)); });
         $('.cmh-prefill-source').each(function () { syncPrefillRow($(this)); });
+    });
+
+    // ─── Conmutador Tabla / Línea de tiempo ───────────────────────────────────
+    $(document).on('click', '.cmh-view-btn', function () {
+        var $btn  = $(this);
+        var view  = $btn.data('view');
+        var $wrap = $btn.closest('.cmh-tab-panel, .cmh-panel');
+
+        $wrap.find('.cmh-view-btn').removeClass('active');
+        $btn.addClass('active');
+        $wrap.find('.cmh-view').hide();
+        $wrap.find('.cmh-view-' + view).show();
     });
 
 })(jQuery);
