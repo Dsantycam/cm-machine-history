@@ -1,5 +1,11 @@
 /**
- * CM Machine History — autocompletado en formularios Forminator v0.8.1
+ * CM Machine History — autocompletado en formularios Forminator
+ *
+ * v0.8.1 — al escribir el código de máquina se consulta la ficha y se rellenan
+ *          marca, modelo, serial, contacto, horómetro, empresa y ciudad.
+ * v2.0   — el mismo relleno se puede disparar desde la URL: al abrir el formato
+ *          desde una tarea, el enlace trae ?cmh_machine=CODIGO y el formulario
+ *          llega listo, sin que el técnico escriba nada.
  */
 (function ($) {
     'use strict';
@@ -91,47 +97,160 @@
         }
     }
 
-    function attachAutocomplete($input, cfg) {
-        var $form  = $input.closest('form');
-        var timer;
-        var $hint  = $('<div class="cmh-machine-hint"></div>').css({
+    /** Pinta el aviso verde/rojo bajo el campo de máquina. */
+    function showHint($hint, ok, machineOrCode) {
+        if (ok) {
+            var m = machineOrCode;
+            $hint.css({ color: '#00a32a', background: '#e7f7ed' }).html(
+                '<strong>✓ ' + (m.brand || '') + ' ' + (m.model || '') + '</strong> — ' +
+                (m.company_name || '') + (m.city_name ? ' / ' + m.city_name : '') +
+                (m.serial ? '<br><small>Serial: ' + m.serial + '</small>' : '')
+            ).show();
+        } else {
+            $hint.css({ color: '#d63638', background: '#fdeaea' })
+                .text('Máquina no encontrada: ' + machineOrCode).show();
+        }
+    }
+
+    /**
+     * Consulta la máquina y rellena el formulario.
+     * Es el único camino de relleno: lo usan tanto el autocompletado al escribir
+     * como el prellenado desde la URL.
+     */
+    function lookupAndFill(code, $form, cfg, $hint) {
+        $.get(ajaxurl, { action: 'cmh_get_machine', code: code })
+            .done(function (resp) {
+                if (!resp || !resp.success) {
+                    if ($hint) showHint($hint, false, code);
+                    return;
+                }
+                if ($hint) showHint($hint, true, resp.data);
+                fillByLabels($form, resp.data);
+                fillContactBySlug($form, resp.data, cfg && cfg.contact ? cfg.contact : null);
+            })
+            .fail(function () { if ($hint) $hint.hide(); });
+    }
+
+    function makeHint($input) {
+        return $('<div class="cmh-machine-hint"></div>').css({
             fontSize: '12px', margin: '4px 0 0', padding: '5px 10px',
             borderRadius: '4px', display: 'none', lineHeight: '1.5',
         }).insertAfter($input);
+    }
+
+    function attachAutocomplete($input, cfg) {
+        if ($input.data('cmhBound')) return;
+        $input.data('cmhBound', true);
+
+        var $form = $input.closest('form');
+        var $hint = makeHint($input);
+        var timer;
 
         $input.on('input change', function () {
             clearTimeout(timer);
             var code = $.trim($(this).val()).toUpperCase();
             if (!code || code.length < 3) { $hint.hide(); return; }
 
+            // Ya consultamos este código: no repetir la llamada. Cubre el caso del
+            // prellenado desde la URL —que dispara 'change' para que la lógica
+            // condicional de Forminator se entere— y también al salir del campo
+            // sin haberlo editado.
+            if ($input.data('cmhLastCode') === code) return;
+
             timer = setTimeout(function () {
-                $.get(ajaxurl, { action: 'cmh_get_machine', code: code })
-                    .done(function (resp) {
-                        if (!resp.success) {
-                            $hint.css({ color: '#d63638', background: '#fdeaea' })
-                                .text('Máquina no encontrada: ' + code).show();
-                            return;
-                        }
-
-                        var m    = resp.data;
-                        var info = [m.brand, m.model, m.serial ? '(' + m.serial + ')' : '', m.company_name, m.city_name]
-                            .filter(Boolean).join(' · ');
-
-                        $hint.css({ color: '#00a32a', background: '#e7f7ed' }).html(
-                            '<strong>✓ ' + (m.brand || '') + ' ' + (m.model || '') + '</strong> — ' +
-                            (m.company_name || '') + (m.city_name ? ' / ' + m.city_name : '') +
-                            (m.serial ? '<br><small>Serial: ' + m.serial + '</small>' : '')
-                        ).show();
-
-                        // Rellenar por etiqueta (marca, modelo, serial, etc.)
-                        fillByLabels($form, m);
-
-                        // Rellenar contacto por slug configurado como respaldo
-                        fillContactBySlug($form, m, cfg.contact || null);
-                    })
-                    .fail(function () { $hint.hide(); });
+                $input.data('cmhLastCode', code);
+                lookupAndFill(code, $form, cfg, $hint);
             }, 600);
         });
+    }
+
+    // ─── v2.0 — Prellenado desde la URL ───────────────────────────────────────
+
+    function queryParam(name) {
+        var m = new RegExp('[?&]' + name + '=([^&#]*)').exec(window.location.search);
+        return m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
+    }
+
+    /**
+     * v2.0 — Aplica los valores que el servidor ya resolvió para este formato.
+     *
+     * `CMHFront.prefill` llega como { form_id: { slug: valor } } según el mapeo
+     * configurado en «Máquinas → Formatos». El navegador no decide nada: solo
+     * escribe. Si el formulario está en la página se busca dentro de su contenedor
+     * para no pisar campos de otro formulario que comparta nombres de slug.
+     */
+    function applyServerPrefill() {
+        var prefill = CMHFront.prefill || {};
+        var applied = false;
+
+        Object.keys(prefill).forEach(function (formId) {
+            var $scope = $('#forminator-module-' + formId);
+            if (!$scope.length) $scope = $(document);
+
+            Object.keys(prefill[formId]).forEach(function (slug) {
+                var $f = $scope.find('[name="' + slug + '"]');
+                if (!$f.length) $f = $('[name="' + slug + '"]');
+                if (!$f.length || $f.data('cmhPrefilled')) return;
+
+                // No se pisa lo que el usuario ya escribió.
+                if ($f.val()) { $f.data('cmhPrefilled', true); return; }
+
+                $f.data('cmhPrefilled', true).val(prefill[formId][slug]).trigger('change');
+                applied = true;
+            });
+        });
+        return applied;
+    }
+
+    /**
+     * Escribe el código en el campo de máquina y dispara el relleno completo.
+     * Devuelve true si encontró el campo.
+     */
+    function prefillMachine(code) {
+        var found = false;
+
+        Object.keys(fieldMap).forEach(function (fieldName) {
+            $('[name="' + fieldName + '"]').each(function () {
+                var $input = $(this);
+                if ($input.data('cmhMachinePrefilled')) { found = true; return; }
+                $input.data('cmhMachinePrefilled', true);
+                found = true;
+
+                attachAutocomplete($input, fieldMap[fieldName]);
+
+                // Se marca como ya consultado ANTES de disparar 'change': el evento
+                // se lanza para que la lógica condicional de Forminator reaccione,
+                // pero no debe provocar una segunda consulta de la misma máquina.
+                $input.data('cmhLastCode', code);
+                $input.val(code).trigger('change');
+
+                // El relleno se dispara de una, sin esperar el debounce de escritura.
+                lookupAndFill(
+                    code,
+                    $input.closest('form'),
+                    fieldMap[fieldName],
+                    $input.next('.cmh-machine-hint')
+                );
+            });
+        });
+
+        applyServerPrefill();
+        return found;
+    }
+
+    /**
+     * Forminator a veces pinta el formulario después del DOM ready (paginación,
+     * lógica condicional, carga diferida), así que no basta con intentarlo una
+     * vez: se reintenta unos segundos y se deja de insistir en cuanto aparece.
+     */
+    function prefillWhenReady(code) {
+        if (prefillMachine(code)) return;
+
+        var tries = 0;
+        var timer = setInterval(function () {
+            tries++;
+            if (prefillMachine(code) || tries >= 25) clearInterval(timer);  // ~10 s
+        }, 400);
     }
 
     $(function () {
@@ -140,6 +259,9 @@
                 attachAutocomplete($(this), fieldMap[fieldName]);
             });
         });
+
+        var code = $.trim(queryParam('cmh_machine')).toUpperCase();
+        if (code) prefillWhenReady(code);
     });
 
 })(jQuery);

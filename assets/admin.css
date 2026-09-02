@@ -299,6 +299,38 @@
 .cmh-chart { width: 100%; overflow-x: auto; }
 .cmh-chart svg { display: block; min-width: 460px; }
 
+/* ── Gráficas e indicadores (v1.1) ────────────────────────── */
+.cmh-chart-title {
+    margin: 18px 0 8px; font-size: 13px; font-weight: 700;
+    color: var(--cmh-gray-900); text-transform: none;
+}
+.cmh-chart-title:first-child { margin-top: 0; }
+
+.cmh-chart-legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    margin: 0 0 8px; font-size: 12px; color: var(--cmh-gray-600);
+}
+.cmh-chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.cmh-chart-legend i {
+    width: 10px; height: 10px; border-radius: 2px; display: inline-block;
+}
+
+/* Dos gráficas lado a lado; una sola columna en pantallas estrechas. */
+.cmh-chart-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 18px;
+}
+.cmh-chart-row > div { min-width: 0; }
+
+/* Gráfica principal + anillo de composición al costado. */
+.cmh-split { display: grid; grid-template-columns: 1fr 210px; gap: 24px; align-items: center; }
+.cmh-split-main, .cmh-split-side { min-width: 0; }
+
+@media (max-width: 1100px) {
+    .cmh-chart-row { grid-template-columns: 1fr; }
+    .cmh-split     { grid-template-columns: 1fr; }
+    .cmh-split-side { max-width: 220px; margin: 0 auto; }
+}
+
 @media (max-width: 782px) {
     .cmh-report-filters { display: block; }
     .cmh-report-filters label { margin-bottom: 10px; }
@@ -314,6 +346,7 @@
     .cmh-toolbar .button, .cmh-card-actions .button, form { display: none !important; }
     .cmh-chart { overflow: visible; }
     .cmh-chart svg { min-width: 0; }
+    .cmh-chart-row, .cmh-split { grid-template-columns: 1fr !important; }
     .cmh-layout      { grid-template-columns: 1fr !important; }
     .cmh-tab-panel   { display: block !important; }
     .cmh-panel       { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
