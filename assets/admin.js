@@ -307,8 +307,13 @@
         closeModal();
         $modalHost = $source.parent();
 
+        // La clase `cmh` va aquí a propósito: la ventana se cuelga de <body>,
+        // fuera de .wrap.cmh, y TODO el estilo de formularios está apuntado a
+        // `.cmh`. Sin ella los campos salen con el estilo por defecto del
+        // navegador —etiquetas en línea, anchos sueltos, sin separación—, que es
+        // exactamente el desorden que se veía al abrir.
         var $backdrop = $(
-            '<div class="cmh-modal-backdrop"><div class="cmh-modal" role="dialog" aria-modal="true">' +
+            '<div class="cmh-modal-backdrop cmh"><div class="cmh-modal" role="dialog" aria-modal="true">' +
             '<div class="cmh-modal-head"><div>' +
             '<h2></h2><p></p>' +
             '</div><button type="button" class="cmh-modal-close" aria-label="Cerrar">&times;</button></div>' +
