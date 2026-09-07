@@ -590,22 +590,52 @@ a.cmh-stat:hover { background: var(--cmh-gray-50); color: inherit; }
 .cmh-modal {
     background: #fff; border-radius: var(--cmh-radius-lg);
     box-shadow: 0 12px 48px rgba(0,0,0,.25);
-    width: 100%; max-width: 880px; margin: auto;
+    width: 100%; max-width: 780px; margin: auto;
+    /* La cabecera se queda fija y solo desplaza el contenido: en el alta de
+       máquina, con la lista larga de campos, el título se perdía al bajar. */
+    display: flex; flex-direction: column; max-height: calc(100vh - 80px);
 }
 .cmh-modal-head {
     display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
-    padding: 20px 24px 14px; border-bottom: 1px solid var(--cmh-gray-200);
+    padding: 18px 24px 14px; border-bottom: 1px solid var(--cmh-gray-200); flex: 0 0 auto;
 }
-.cmh-modal-head h2 { margin: 0 0 4px; font-size: 17px; font-weight: 700; }
+.cmh-modal-head h2 { margin: 0 0 4px; font-size: 17px; font-weight: 700; line-height: 1.3; }
 .cmh-modal-head p  { margin: 0; font-size: 13px; color: var(--cmh-gray-600); }
 .cmh-modal-close {
     border: 0; background: none; cursor: pointer; font-size: 26px; line-height: 1;
     color: var(--cmh-gray-400); padding: 0 4px;
 }
 .cmh-modal-close:hover { color: var(--cmh-gray-900); }
-.cmh-modal-body { padding: 20px 24px 24px; }
-.cmh-modal-body .cmh-form-grid { grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 6px 18px; }
+.cmh-modal-body { padding: 4px 24px 0; overflow-y: auto; flex: 1 1 auto; }
+
+/* Dos columnas cómodas y con aire entre filas: a 180px salían tres o cuatro
+   columnas apretadas y las etiquetas se partían en dos renglones. */
+.cmh-modal-body .cmh-form-grid { grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap: 2px 20px; }
+.cmh-modal-body .cmh-form-grid > label,
+.cmh-modal-body > form > label { margin-top: 14px; }
+.cmh-modal-body .cmh-hint { margin: 10px 0 0; }
+.cmh-modal-body .cmh-form-section:first-of-type,
+.cmh-modal-body .cmh-fieldset:first-of-type { border-top: 0; margin-top: 10px; padding-top: 0; }
+
+/* Los botones se quedan a la vista al final del formulario, sin ocupar todo el
+   ancho: un «Guardar» de 780px no se lee como un botón. */
+.cmh-modal-body .cmh-form-actions,
+.cmh-modal-body > form > .button-primary:last-child {
+    position: sticky; bottom: 0; z-index: 1;
+    margin: 18px -24px 0; padding: 14px 24px;
+    background: #fff; border-top: 1px solid var(--cmh-gray-200);
+    display: flex; gap: 8px; justify-content: flex-end;
+}
+.cmh-modal-body .cmh-form-actions .button-primary,
+.cmh-modal-body > form > .button-primary:last-child { width: auto; margin-top: 0; }
+.cmh-modal-body .cmh-form-actions .button-primary { order: 2; }
+
 body.cmh-modal-open { overflow: hidden; }
+
+@media (max-width: 782px) {
+    .cmh-modal-backdrop { padding: 12px 8px; }
+    .cmh-modal { max-height: calc(100vh - 24px); }
+}
 
 /* ── Pestañas fijas al hacer scroll ───────────────────────────── */
 .cmh-tabs-wrapper.cmh-sticky {

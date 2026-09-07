@@ -124,6 +124,22 @@ class CMH_Admin {
         return strtoupper( preg_replace( '/[^A-Z0-9]/', '', remove_accents( $v ) ) );
     }
 
+    /**
+     * Un nombre de carpeta seguro a partir de un texto libre (v2.8).
+     *
+     * El código de máquina lleva espacios y un punto —«APC BOG TY No. 001»—, así
+     * que no se puede reducir a letras y números sin desfigurarlo. Lo que se
+     * quita es todo lo que permita salirse del directorio: barras, dos puntos y
+     * cualquier secuencia de puntos.
+     */
+    public static function safe_folder( $v ) {
+        $v = remove_accents( (string) $v );
+        $v = preg_replace( '/[^A-Za-z0-9 ._-]/', '', $v );   // fuera / \ : y demás
+        $v = preg_replace( '/\.{2,}/', '.', $v );            // ningún «..»
+        $v = trim( $v, ' .' );                               // ni empezar/terminar en punto
+        return substr( $v, 0, 120 );
+    }
+
     public static function brand_code( $brand ) {
         static $map = [
             'TOYOTA'       => 'TY',
@@ -1187,7 +1203,8 @@ class CMH_Admin {
             . '<label>Mantenimiento recurrente <span class="cmh-tooltip" title="Al registrar un preventivo se reprograma la próxima fecha sumando este intervalo.">[?]</span>'
             . CMH_Schedule::interval_field( 0 ) . '</label>'
             . '<label>Notas<textarea name="notes"></textarea></label>'
-            . '<button class="button button-primary">Guardar máquina</button></form>';
+            . '<div class="cmh-form-actions"><button class="button button-primary">Guardar máquina</button></div>'
+            . '</form>';
     }
 
     public static function edit_machine_form( $m ) {
@@ -2189,8 +2206,13 @@ class CMH_Admin {
         $m = $wpdb->get_row( $wpdb->prepare( "SELECT machine_code FROM {$t['machines']} WHERE id=%d", $machine_id ) );
         if ( ! $m ) wp_die( 'Máquina no encontrada.' );
 
-        $dir_filter = static function ( $dirs ) use ( $m ) {
-            $dirs['subdir'] = '/cm-machine-history/' . $m->machine_code;
+        // v2.8 (seguridad) — El código de máquina se puede editar a mano y hasta
+        // ahora entraba TAL CUAL en la ruta: un código con «../» escribía fuera
+        // de la carpeta de subidas. Se reduce a un nombre de carpeta seguro.
+        $carpeta = self::safe_folder( $m->machine_code ) ?: ( 'maquina-' . $machine_id );
+
+        $dir_filter = static function ( $dirs ) use ( $carpeta ) {
+            $dirs['subdir'] = '/cm-machine-history/' . $carpeta;
             $dirs['path']   = $dirs['basedir'] . $dirs['subdir'];
             $dirs['url']    = $dirs['baseurl'] . $dirs['subdir'];
             return $dirs;
@@ -2198,7 +2220,7 @@ class CMH_Admin {
         add_filter( 'upload_dir', $dir_filter );
         $file = wp_handle_upload( $_FILES['format_file'], [ 'test_form' => false ] );
         remove_filter( 'upload_dir', $dir_filter );
-        if ( isset( $file['error'] ) ) wp_die( $file['error'] );
+        if ( isset( $file['error'] ) ) wp_die( esc_html( $file['error'] ) );
 
         $wpdb->insert( $t['files'], [
             'machine_id' => $machine_id, 'intervention_id' => intval( $_POST['intervention_id'] ) ?: null,
@@ -2473,11 +2495,24 @@ class CMH_Admin {
     // AJAX
     // =========================================================================
 
+    /**
+     * Consulta de máquina para el prellenado de formularios.
+     *
+     * v2.8 (seguridad) — Antes devolvía la fila COMPLETA de cualquier máquina a
+     * cualquier usuario con `read`: un cliente de una empresa podía leer las
+     * máquinas de otra escribiendo su código, saltándose el aislamiento que sí
+     * respeta el portal. Ahora los datos internos —notas, horómetro, fechas—
+     * solo salen si el usuario tiene acceso a ESA máquina; el resto recibe lo
+     * mismo que un visitante, que es lo justo para rellenar el formato.
+     */
     public static function ajax_get_machine() {
-        if ( ! current_user_can( 'read' ) ) wp_send_json_error( [ 'message' => 'Sin permisos.' ] );
+        if ( ! is_user_logged_in() ) wp_send_json_error( [ 'message' => 'Sin permisos.' ] );
         global $wpdb; $t = CMH_Core::tables();
+
         $code = sanitize_text_field( $_GET['code'] ?? '' );
-        $m    = $wpdb->get_row( $wpdb->prepare(
+        if ( $code === '' ) wp_send_json_error( [ 'message' => 'Código requerido.' ] );
+
+        $m = $wpdb->get_row( $wpdb->prepare(
             "SELECT m.*, c.name company_name, ci.name city_name
              FROM {$t['machines']} m
              JOIN {$t['companies']} c  ON c.id=m.company_id
@@ -2486,10 +2521,62 @@ class CMH_Admin {
             $code, $code
         ) );
         if ( ! $m ) wp_send_json_error( [ 'message' => 'Máquina no encontrada.' ] );
-        wp_send_json_success( $m );
+
+        wp_send_json_success( self::can_see_machine( (int) $m->id ) ? $m : self::machine_prefill_payload( $m ) );
     }
 
+    /**
+     * ¿El usuario actual tiene algo que ver con esta máquina?
+     *
+     * Es la misma regla que aplican el panel del técnico y el portal del
+     * cliente; aquí se reúne para que la consulta AJAX no pueda quedarse atrás.
+     */
+    private static function can_see_machine( $machine_id ) {
+        if ( current_user_can( 'edit_others_posts' ) ) return true;
+        if ( class_exists( 'CMH_Tech' ) && current_user_can( 'cmh_tech' )
+             && CMH_Tech::can_access_machine( $machine_id ) ) return true;
+        if ( class_exists( 'CMH_Client' ) && current_user_can( 'cmh_client' )
+             && CMH_Client::can_access_machine( $machine_id ) ) return true;
+        return false;
+    }
+
+    /** Lo mínimo que el formulario necesita para prellenarse. Nada interno. */
+    private static function machine_prefill_payload( $m ) {
+        return (object) [
+            'machine_code' => $m->machine_code,
+            'brand'        => $m->brand,
+            'model'        => $m->model,
+            'serial'       => $m->serial,
+            'contact'      => $m->contact,
+            'company_name' => $m->company_name,
+            'city_name'    => $m->city_name,
+        ];
+    }
+
+    /**
+     * Tope de consultas por IP. El formato es público por diseño, así que no hay
+     * nonce que valga: lo que se evita aquí es que alguien recorra los códigos
+     * —que son predecibles: APC BOG TY No. 001, 002…— y se lleve la flota entera
+     * con sus contactos.
+     */
+    private static function rate_limit( $clave, $maximo, $ventana ) {
+        $ip    = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : 'sin-ip';
+        $llave = 'cmh_rl_' . $clave . '_' . md5( $ip );
+        $n     = (int) get_transient( $llave );
+        if ( $n >= $maximo ) return false;
+        set_transient( $llave, $n + 1, $ventana );
+        return true;
+    }
+
+    /**
+     * La misma consulta, para quien rellena el formato sin haber iniciado sesión.
+     * Devuelve solo lo que el formulario necesita, y con tope por IP: v2.8.
+     */
     public static function ajax_get_machine_public() {
+        if ( ! self::rate_limit( 'maq', 40, 10 * MINUTE_IN_SECONDS ) ) {
+            wp_send_json_error( [ 'message' => 'Demasiadas consultas seguidas. Espera un momento.' ], 429 );
+        }
+
         global $wpdb; $t = CMH_Core::tables();
         $code = sanitize_text_field( $_GET['code'] ?? '' );
         if ( ! $code ) wp_send_json_error( [ 'message' => 'Código requerido.' ] );
