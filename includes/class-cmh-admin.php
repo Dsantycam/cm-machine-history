@@ -542,8 +542,17 @@ class CMH_Admin {
             . '<label>Nombre de la empresa <em>*</em><input name="name" required class="cmh-uppercase"></label>'
             . '<label>Código corto <em>*</em><input name="code" placeholder="APC" maxlength="10" required class="cmh-uppercase"></label>'
             . '</div>'
-            . '<p class="cmh-hint" style="margin-top:12px">El código corto se usa para armar el de cada máquina: <strong>APC BOG TY No. 001</strong></p>'
-            . '<div class="cmh-form-actions"><button class="button button-primary">Guardar empresa</button></div>'
+            . '<p class="cmh-hint" style="margin-top:12px">El código corto se usa para armar el de cada máquina: <strong>APC BOG TY No. 001</strong></p>';
+
+        // v2.7 — Los datos de contacto se pueden llenar aquí mismo. Van plegados
+        // para que dar de alta siga siendo dos campos, pero sin obligar a crear
+        // la empresa y volver a entrar solo para escribir un teléfono.
+        echo '<details class="cmh-optional-block"><summary>Datos de contacto, ubicación y facturación'
+            . ' <span>opcional, se pueden completar después</span></summary>';
+        self::contact_fields_form( null, true );
+        echo '</details>';
+
+        echo '<div class="cmh-form-actions"><button class="button button-primary">Guardar empresa</button></div>'
             . '</form></div>';
         self::page_footer();
     }
@@ -629,9 +638,16 @@ class CMH_Admin {
             . '<div class="cmh-form-grid">'
             . '<label>Nombre de la sucursal <em>*</em><input name="name" placeholder="BOGOTÁ" required class="cmh-uppercase"></label>'
             . '<label>Código corto <em>*</em><input name="code" placeholder="BOG" maxlength="10" required class="cmh-uppercase"></label>'
-            . '</div>'
-            . '<p class="cmh-hint" style="margin-top:12px">Podrás completar sus datos de contacto al entrar en la sucursal.</p>'
-            . '<div class="cmh-form-actions"><button class="button button-primary">Guardar sucursal</button></div>'
+            . '</div>';
+
+        // v2.7 — Igual que en la empresa: se pueden dejar desde aquí. La sucursal
+        // hereda de la empresa lo que quede vacío, y el marcador de agua lo dice.
+        echo '<details class="cmh-optional-block"><summary>Datos de contacto y ubicación'
+            . ' <span>opcional, hereda de la empresa lo que dejes vacío</span></summary>';
+        self::contact_fields_form( null, false, $c );
+        echo '</details>';
+
+        echo '<div class="cmh-form-actions"><button class="button button-primary">Guardar sucursal</button></div>'
             . '</form></div>';
 
         self::page_footer();
@@ -1449,9 +1465,15 @@ class CMH_Admin {
             return;
         }
 
+        // v2.7 — Editar desde aquí, sin tener que entrar a la máquina.
+        // El formulario se pinta SOLO para la fila que se está editando, que
+        // llega por la URL: con 500 filas, 500 formularios ocultos harían la
+        // pantalla inusable. Así además se conserva el filtro al volver.
+        $editando = intval( $_GET['edit'] ?? 0 );
+
         echo '<div class="cmh-panel"><div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr>'
             . '<th>Fecha</th><th>Máquina</th><th>Tipo</th><th>Técnico</th>'
-            . '<th class="cmh-num">Parada</th><th class="cmh-num">Costo</th><th>Pago</th><th>PDF</th>'
+            . '<th class="cmh-num">Parada</th><th class="cmh-num">Costo</th><th>Pago</th><th>PDF</th><th></th>'
             . '</tr></thead><tbody>';
 
         foreach ( $rows as $r ) {
@@ -1470,7 +1492,22 @@ class CMH_Admin {
                 . '<td>' . ( $r->file_url
                     ? '<a class="button button-small" target="_blank" rel="noopener" href="' . esc_url( $r->file_url ) . '">Ver</a>'
                     : '<span class="cmh-muted">—</span>' ) . '</td>'
+                . '<td class="cmh-nowrap">'
+                . ( $editando === (int) $r->id
+                    ? '<a class="button button-small" href="' . esc_url( self::interv_url( $f ) . '#iv-' . intval( $r->id ) ) . '">Cerrar</a>'
+                    : '<a class="button button-small" href="' . esc_url( self::interv_url( array_merge( $f, [ 'edit' => (int) $r->id ] ) ) . '#iv-' . intval( $r->id ) ) . '">Editar</a>' )
+                . '</td>'
                 . '</tr>';
+
+            if ( $editando === (int) $r->id ) {
+                echo '<tr class="cmh-edit-row" id="iv-' . intval( $r->id ) . '"><td colspan="9">'
+                    . '<p class="cmh-hint" style="margin:0 0 10px">Editando la intervención <strong>#' . intval( $r->id )
+                    . '</strong> de <strong>' . esc_html( $r->machine_code ?: '—' ) . '</strong>. '
+                    . 'El cambio queda anotado en la línea de tiempo de la máquina.</p>';
+                self::intervention_edit_form( $r, self::interv_url( $f ),
+                    '<a class="button button-small" href="' . esc_url( self::interv_url( $f ) ) . '">Cancelar</a>' );
+                echo '</td></tr>';
+            }
         }
         echo '</tbody></table></div>';
         if ( count( $rows ) >= 500 )
@@ -1517,6 +1554,76 @@ class CMH_Admin {
             . '<button class="button button-primary">Aplicar</button>'
             . '<a class="button" href="' . esc_url( self::admin_url( CMH_SLUG . '-interventions' ) ) . '">Limpiar</a>'
             . '</div></form></div>';
+    }
+
+    /**
+     * Modificaciones registradas de varias intervenciones, en UNA sola consulta.
+     * Devuelve [ intervention_id => [ filas ] ], de la más antigua a la más nueva.
+     */
+    public static function intervention_changes( $ids ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $ids = array_filter( array_map( 'intval', (array) $ids ) );
+        if ( ! $ids ) return [];
+
+        $rows = $wpdb->get_results(
+            "SELECT intervention_id, created_at, message FROM {$t['logs']}
+             WHERE level='edit' AND intervention_id IN (" . implode( ',', $ids ) . ")
+             ORDER BY id ASC" );
+
+        $out = [];
+        foreach ( $rows as $r ) $out[ (int) $r->intervention_id ][] = $r;
+        return $out;
+    }
+
+    /**
+     * Formulario de edición de una intervención (v2.7).
+     *
+     * Vive en un solo sitio a propósito: lo usan el timeline de la máquina y la
+     * pantalla de Intervenciones, y dos copias del mismo formulario acaban
+     * separándose —una gana un campo, la otra no— sin que nadie lo note.
+     *
+     * @param object $r           Fila de la intervención.
+     * @param string $redirect    A dónde volver tras guardar. Vacío = la máquina.
+     * @param string $cancel_html Botón o enlace de cancelar, propio de cada sitio.
+     */
+    public static function intervention_edit_form( $r, $redirect = '', $cancel_html = '' ) {
+        self::form_start( 'cm_edit_intervention' );
+        echo '<input type="hidden" name="intervention_id" value="' . intval( $r->id ) . '">';
+        if ( $redirect ) echo '<input type="hidden" name="redirect_to" value="' . esc_url( $redirect ) . '">';
+
+        echo '<div class="cmh-form-grid">'
+            . '<label>Fecha<input type="date" name="intervention_date" value="' . esc_attr( $r->intervention_date ) . '"></label>'
+            . '<label>Tipo<select name="maintenance_type">';
+        foreach ( CMH_Taxonomy::mtype_labels() as $k => $v )
+            echo '<option value="' . esc_attr( $k ) . '" ' . selected( $r->maintenance_type, $k, false ) . '>' . esc_html( $v ) . '</option>';
+        echo '</select></label>'
+            . '<label>Técnico<input name="technician" value="' . esc_attr( $r->technician ) . '"></label>'
+            . '<label>Horas parada' . ( $r->worked_hours > 0 ? ' <small style="color:#646970">(H. trabajadas: ' . esc_html( $r->worked_hours ) . ' h)</small>' : '' )
+            . '<input type="number" step="0.01" name="downtime_hours" value="' . esc_attr( $r->downtime_hours ) . '" min="0" placeholder="' . esc_attr( $r->worked_hours > 0 ? $r->worked_hours : '0' ) . '"></label>'
+            . '<label>Costo<input type="number" step="100" name="cost" value="' . esc_attr( $r->cost ) . '" min="0"></label>'
+            . '<label>Estado de pago<select name="payment_status">';
+        foreach ( self::payment_statuses() as $k => $v )
+            echo '<option value="' . esc_attr( $k ) . '" ' . selected( $r->payment_status, $k, false ) . '>' . esc_html( $v ) . '</option>';
+        echo '</select></label>'
+            . '<label>Monto abonado<input type="number" step="100" name="paid_amount" value="' . esc_attr( $r->paid_amount ) . '" min="0"></label>'
+            . '</div>';
+
+        // v2.7 — Los sistemas también se editan: hasta ahora había que corregirlos
+        // desde el formulario original o quedarse con lo que llegó.
+        $marcados = CMH_Taxonomy::systems_from_string( $r->failure_system ?? '' );
+        echo '<label>Sistema / falla <span class="cmh-optional">(puedes marcar varios)</span><span class="cmh-checklist">';
+        foreach ( self::failure_systems() as $k => $v )
+            echo '<label class="cmh-inline-check"><input type="checkbox" name="failure_system[]" value="' . esc_attr( $k ) . '" '
+                . checked( in_array( $k, $marcados, true ), true, false ) . '> ' . esc_html( $v ) . '</label>';
+        echo '</span></label>';
+
+        echo '<label class="cmh-inline-check" style="margin-top:8px"><input type="checkbox" name="affects_availability" value="1" '
+            . checked( $r->affects_availability, 1, false ) . '> Afecta disponibilidad</label>'
+            . '<label style="display:block;margin-top:8px">Observaciones<textarea name="observations">' . esc_textarea( (string) $r->observations ) . '</textarea></label>'
+            . '<div class="cmh-form-actions">'
+            . '<button class="button button-primary button-small">Guardar</button>'
+            . $cancel_html
+            . '</div></form>';
     }
 
     public static function machine_interventions( $machine_id, $limit = 150 ) {
@@ -1599,6 +1706,10 @@ class CMH_Admin {
         foreach ( CMH_Taxonomy::mtype_labels() as $mk => $ml )
             echo '<button type="button" class="button button-small cmh-tl-filter" data-filter="' . esc_attr( $mk ) . '">' . esc_html( $ml ) . '</button>';
         echo '</div>';
+        // v2.7 — Las modificaciones de todas las tarjetas, en una sola consulta:
+        // pedirlas dentro del bucle serían 150 consultas en una máquina cargada.
+        $modificaciones = self::intervention_changes( wp_list_pluck( $rows, 'id' ) );
+
         echo '<div class="cmh-timeline">';
         // v2.3 — El color del punto y del borde sale de la taxonomía, así que un
         // tipo nuevo no queda gris ni indistinguible del resto.
@@ -1625,6 +1736,17 @@ class CMH_Admin {
                 . '</div>';
             if ( $r->services )     echo '<p><strong>Servicios:</strong> '     . esc_html( wp_trim_words( $r->services,     32 ) ) . '</p>';
             if ( $r->observations ) echo '<p><strong>Observaciones:</strong> ' . esc_html( wp_trim_words( $r->observations, 32 ) ) . '</p>';
+
+            // v2.7 — Lo que se editó a mano, con quién y cuándo: una hoja de vida
+            // que se puede corregir sin dejar rastro no sirve como historial.
+            if ( ! empty( $modificaciones[ (int) $r->id ] ) ) {
+                echo '<div class="cmh-changes"><strong>Modificaciones</strong><ul>';
+                foreach ( $modificaciones[ (int) $r->id ] as $m )
+                    echo '<li><time>' . esc_html( mysql2date( 'd/m/Y H:i', $m->created_at ) ) . '</time> '
+                        . esc_html( $m->message ) . '</li>';
+                echo '</ul></div>';
+            }
+
             echo '<div class="cmh-card-actions">';
             if ( $r->file_url ) {
                 echo '<a class="button button-small" target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>';
@@ -1647,29 +1769,10 @@ class CMH_Admin {
 
             // ── Formulario inline de edición ──────────────────────────────────
             echo '<div id="cmh-edit-' . intval( $r->id ) . '" class="cmh-edit-form" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08)">';
-            self::form_start( 'cm_edit_intervention' );
-            echo '<input type="hidden" name="intervention_id" value="' . intval( $r->id ) . '">';
-            echo '<div class="cmh-form-grid">'
-                . '<label>Fecha<input type="date" name="intervention_date" value="' . esc_attr( $r->intervention_date ) . '"></label>'
-                . '<label>Tipo<select name="maintenance_type">';
-            foreach ( CMH_Taxonomy::mtype_labels() as $k => $v )
-                echo '<option value="' . esc_attr( $k ) . '" ' . selected( $r->maintenance_type, $k, false ) . '>' . esc_html( $v ) . '</option>';
-            echo '</select></label>'
-                . '<label>Técnico<input name="technician" value="' . esc_attr( $r->technician ) . '"></label>'
-                . '<label>Horas parada' . ( $r->worked_hours > 0 ? ' <small style="color:#646970">(H. trabajadas: ' . esc_html( $r->worked_hours ) . ' h)</small>' : '' ) . '<input type="number" step="0.01" name="downtime_hours" value="' . esc_attr( $r->downtime_hours ) . '" min="0" placeholder="' . esc_attr( $r->worked_hours > 0 ? $r->worked_hours : '0' ) . '"></label>'
-                . '<label>Costo<input type="number" step="100" name="cost" value="' . esc_attr( $r->cost ) . '" min="0"></label>'
-                . '<label>Estado de pago<select name="payment_status">';
-            foreach ( self::payment_statuses() as $k => $v )
-                echo '<option value="' . esc_attr( $k ) . '" ' . selected( $r->payment_status, $k, false ) . '>' . esc_html( $v ) . '</option>';
-            echo '</select></label>'
-                . '<label>Monto abonado<input type="number" step="100" name="paid_amount" value="' . esc_attr( $r->paid_amount ) . '" min="0"></label>'
-                . '</div>'
-                . '<label><input type="checkbox" name="affects_availability" value="1" ' . checked( $r->affects_availability, 1, false ) . '> Afecta disponibilidad</label>'
-                . '<label style="display:block;margin-top:8px">Observaciones<textarea name="observations">' . esc_textarea( (string) $r->observations ) . '</textarea></label>'
-                . '<div style="margin-top:8px;display:flex;gap:8px">'
-                . '<button class="button button-primary button-small">Guardar</button>'
-                . '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-edit-' . intval( $r->id ) . '">Cancelar</button>'
-                . '</div></form></div>';
+            self::intervention_edit_form( $r, '',
+                '<button type="button" class="button button-small cmh-btn-toggle-edit" data-target="cmh-edit-'
+                . intval( $r->id ) . '">Cancelar</button>' );
+            echo '</div>';
 
             echo '</div></div>'; // close .cmh-timeline-card, .cmh-timeline-item
         }
@@ -1856,7 +1959,9 @@ class CMH_Admin {
         }
         echo '</tbody></table><p style="font-size:12px;color:#646970;margin-top:10px">Forminator captura los envíos, crea la intervención y E2PDF asocia el PDF generado. Si el PDF no aparece de inmediato, WP-Cron lo reintenta 90 s después.</p></div>';
 
-        $rows = $wpdb->get_results( "SELECT * FROM {$t['logs']} ORDER BY id DESC LIMIT 100" );
+        // Las ediciones a mano se guardan en la misma tabla pero NO son eventos de
+        // integración: su sitio es la línea de tiempo de la máquina.
+        $rows = $wpdb->get_results( "SELECT * FROM {$t['logs']} WHERE level <> 'edit' ORDER BY id DESC LIMIT 100" );
         echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Logs de integración</h2>'
             . '<a class="button" href="' . esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=cm_export_csv&type=logs' ), 'cmh_action' ) ) . '">Exportar CSV</a></div>'
             . '<table class="widefat cmh"><thead><tr><th>Fecha</th><th>Nivel</th><th>Form</th><th>Máquina</th><th>Mensaje</th><th></th></tr></thead><tbody>';
@@ -1890,16 +1995,26 @@ class CMH_Admin {
     // CRUD
     // =========================================================================
 
+    // v2.7 — El alta acepta los mismos datos de contacto que la edición: crear y
+    // tener que volver a entrar solo para escribir un teléfono no tiene sentido.
+    // Los campos son opcionales, así que lo que no venga se guarda vacío.
     public static function save_company() {
         self::check(); global $wpdb; $t = CMH_Core::tables();
-        $wpdb->insert( $t['companies'], [ 'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ), 'code' => self::clean_code( $_POST['code'] ) ] );
+        $wpdb->insert( $t['companies'], array_merge( [
+            'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ),
+            'code' => self::clean_code( $_POST['code'] ),
+        ], self::contact_fields_from_post( true ) ) );
         self::redirect_to( self::admin_url( CMH_SLUG . '-companies' ), 'Empresa guardada.' );
     }
 
     public static function save_city() {
         self::check(); global $wpdb; $t = CMH_Core::tables();
         $cid = intval( $_POST['company_id'] );
-        $wpdb->insert( $t['cities'], [ 'company_id' => $cid, 'name' => strtoupper( sanitize_text_field( $_POST['name'] ) ), 'code' => self::clean_code( $_POST['code'] ) ] );
+        $wpdb->insert( $t['cities'], array_merge( [
+            'company_id' => $cid,
+            'name'       => strtoupper( sanitize_text_field( $_POST['name'] ) ),
+            'code'       => self::clean_code( $_POST['code'] ),
+        ], self::contact_fields_from_post( false ) ) );
         self::redirect_to( self::admin_url( CMH_SLUG . '-companies', [ 'company_id' => $cid ] ), 'Ciudad/Sucursal guardada.' );
     }
 
@@ -2200,16 +2315,22 @@ class CMH_Admin {
     public static function edit_intervention() {
         self::check();
         global $wpdb; $t = CMH_Core::tables();
-        $id         = intval( $_POST['intervention_id'] );
-        $machine_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT machine_id FROM {$t['interventions']} WHERE id=%d", $id ) );
-        if ( ! $machine_id ) wp_die( 'Intervención no encontrada.' );
+        $id = intval( $_POST['intervention_id'] );
+
+        // Se lee ANTES de tocar nada: sin la fila previa no hay con qué comparar
+        // y el registro del cambio quedaría en «se editó algo».
+        $antes = $wpdb->get_row( $wpdb->prepare(
+            "SELECT i.*, m.machine_code FROM {$t['interventions']} i
+             LEFT JOIN {$t['machines']} m ON m.id=i.machine_id WHERE i.id=%d", $id ) );
+        if ( ! $antes ) wp_die( 'Intervención no encontrada.' );
+        $machine_id = (int) $antes->machine_id;
 
         $mtype     = sanitize_text_field( $_POST['maintenance_type'] );
         $manual_av = isset( $_POST['affects_availability'] ) ? 1 : 0;
 
         list( $pay_status, $pay_paid ) = self::normalize_payment( $_POST['payment_status'] ?? '', $_POST['cost'] ?? 0, $_POST['paid_amount'] ?? 0 );
 
-        $wpdb->update( $t['interventions'], [
+        $despues = [
             'intervention_date'    => sanitize_text_field( $_POST['intervention_date'] ),
             'maintenance_type'     => $mtype,
             'technician'           => sanitize_text_field( $_POST['technician'] ),
@@ -2218,10 +2339,78 @@ class CMH_Admin {
             'payment_status'       => $pay_status,
             'paid_amount'          => $pay_paid,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
+            'failure_system'       => CMH_Taxonomy::systems_to_string( (array) ( $_POST['failure_system'] ?? [] ) ),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),
-        ], [ 'id' => $id ] );
+        ];
 
-        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Intervención actualizada.' );
+        $wpdb->update( $t['interventions'], $despues, [ 'id' => $id ] );
+
+        // v2.7 — El cambio se anota en la línea de tiempo de la máquina, con quién
+        // y qué. Editar el historial sin dejar rastro es justo lo que no debe
+        // pasar en una hoja de vida.
+        $cambios = self::intervention_diff( $antes, $despues );
+        if ( $cambios ) {
+            $quien = wp_get_current_user();
+            CMH_Core::log( 'edit', 0, (string) $antes->machine_code, $id,
+                'Editada por ' . ( $quien && $quien->display_name ? $quien->display_name : 'un administrador' )
+                . ': ' . implode( ' · ', $cambios ), null );
+        }
+
+        self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ),
+            $cambios ? 'Intervención actualizada.' : 'No había nada que cambiar.' );
+    }
+
+    /**
+     * Qué cambió entre la fila anterior y lo que se acaba de guardar, en texto
+     * legible. Los números se comparan como números: «450000» y «450000.00» son
+     * el mismo costo y no deben salir como una modificación.
+     */
+    private static function intervention_diff( $antes, $despues ) {
+        $etiquetas = [
+            'intervention_date'    => 'Fecha',
+            'maintenance_type'     => 'Tipo',
+            'technician'           => 'Técnico',
+            'downtime_hours'       => 'Horas de parada',
+            'cost'                 => 'Costo',
+            'payment_status'       => 'Estado de pago',
+            'paid_amount'          => 'Abonado',
+            'affects_availability' => 'Afecta disponibilidad',
+            'failure_system'       => 'Sistema / falla',
+            'observations'         => 'Observaciones',
+        ];
+        $numericos = [ 'downtime_hours', 'cost', 'paid_amount', 'affects_availability' ];
+
+        $out = [];
+        foreach ( $etiquetas as $campo => $etiqueta ) {
+            $a = $antes->$campo ?? '';
+            $d = $despues[ $campo ];
+
+            $igual = in_array( $campo, $numericos, true )
+                ? ( abs( (float) $a - (float) $d ) < 0.001 )
+                : ( (string) $a === (string) $d );
+            if ( $igual ) continue;
+
+            // El texto largo no se vuelca entero en el registro: se dice que cambió.
+            if ( $campo === 'observations' ) { $out[] = 'Observaciones actualizadas'; continue; }
+
+            $out[] = $etiqueta . ': ' . self::diff_value( $campo, $a ) . ' → ' . self::diff_value( $campo, $d );
+        }
+        return $out;
+    }
+
+    /** Un valor del historial, tal como lo lee una persona. */
+    private static function diff_value( $campo, $valor ) {
+        if ( $valor === '' || $valor === null ) return '(vacío)';
+        switch ( $campo ) {
+            case 'maintenance_type':     return CMH_Taxonomy::mtype_label( $valor );
+            case 'payment_status':       return CMH_Taxonomy::pstate_label( $valor );
+            case 'failure_system':       return CMH_Taxonomy::systems_label( $valor ) ?: '(vacío)';
+            case 'affects_availability': return ( (int) $valor === 1 ) ? 'Sí' : 'No';
+            case 'cost':
+            case 'paid_amount':          return '$' . number_format( (float) $valor, 0, ',', '.' );
+            case 'downtime_hours':       return ( 0 + $valor ) . ' h';
+        }
+        return (string) $valor;
     }
 
     // =========================================================================
