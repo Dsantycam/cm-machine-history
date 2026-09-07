@@ -631,6 +631,36 @@ body.cmh-modal-open { overflow: hidden; }
 /* ── Estado vacío con salida ──────────────────────────────────── */
 .cmh-empty-actions { margin-top: 14px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
+/* ── Bloque opcional plegado (datos de contacto en el alta) ────────
+   Dar de alta sigue siendo dos campos; el resto está a un clic, para
+   no obligar a crear la ficha y volver a entrar a completarla. */
+.cmh-optional-block { margin-top: 14px; border-top: 1px solid var(--cmh-gray-200); padding-top: 12px; }
+.cmh-optional-block > summary {
+    cursor: pointer; font-weight: 600; font-size: 13px;
+    color: var(--cmh-blue); list-style: none; user-select: none;
+}
+.cmh-optional-block > summary::-webkit-details-marker { display: none; }
+.cmh-optional-block > summary::before { content: '▸ '; }
+.cmh-optional-block[open] > summary::before { content: '▾ '; }
+.cmh-optional-block > summary span { font-weight: 400; color: var(--cmh-gray-600); }
+.cmh-optional-block .cmh-form-section { margin-top: 4px; }
+
+/* ── Modificaciones de una intervención ────────────────────────────
+   El historial se puede corregir, pero no en silencio: cada edición
+   queda anotada en su tarjeta de la línea de tiempo. */
+.cmh-changes {
+    margin: 10px 0 0; padding: 8px 10px; border-radius: 4px;
+    background: var(--cmh-gray-50, #f6f7f7); border-left: 3px solid var(--cmh-gray-200);
+}
+.cmh-changes > strong { display: block; font-size: 11px; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--cmh-gray-600); margin-bottom: 4px; }
+.cmh-changes ul { margin: 0; padding: 0; list-style: none; }
+.cmh-changes li { font-size: 12px; color: var(--cmh-gray-900); margin: 2px 0; }
+.cmh-changes time { color: var(--cmh-gray-600); margin-right: 6px; white-space: nowrap; }
+
+/* ── Fila de edición dentro de una tabla ───────────────────────────── */
+.cmh-edit-row > td { background: #f6f7f7; padding: 14px 16px; }
+
 /* ── Lista de casillas (varios sistemas de falla) ──────────────────
    En rejilla, para que quepan sin volverse una columna larguísima.
    Con scroll propio: si el usuario carga 30 sistemas, el formulario
