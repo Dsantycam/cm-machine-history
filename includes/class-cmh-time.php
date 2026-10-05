@@ -82,6 +82,13 @@ class CMH_Time {
             // «Completada» cierra; volver a «Pendiente» también (es una pausa).
             self::stop( (int) $task->id );
         }
+
+        // v2.9 — Como todos los cambios de estado pasan por aquí, también se
+        // avisa al programador de mantenimientos: si la tarea era la del
+        // mantenimiento programado, la máquina deja de figurar como vencida.
+        if ( in_array( $new_status, [ 'completada', 'sin_formato' ], true ) && class_exists( 'CMH_Schedule' ) ) {
+            CMH_Schedule::on_task_done( $task );
+        }
     }
 
     /**
@@ -89,9 +96,13 @@ class CMH_Time {
      * quien mueve la tarea es un técnico (y no un administrador previsualizando),
      * manda él: cubre reasignaciones a medio camino y tareas sin asignar que un
      * técnico toma por su cuenta.
+     *
+     * v2.9 — Un administrador que también es técnico cuenta como técnico cuando
+     * mueve SU propia tarea; si mueve la de otro, sigue siendo el administrador.
      */
     private static function worker_for( $task, $actor_id ) {
         $actor_id = (int) $actor_id;
+        if ( $actor_id && $actor_id === (int) $task->assigned_to ) return $actor_id;
         if ( $actor_id
             && user_can( $actor_id, 'cmh_tech' )
             && ! user_can( $actor_id, 'edit_others_posts' ) ) {
@@ -467,7 +478,7 @@ class CMH_Time {
              LEFT JOIN {$t['machines']}  m ON m.id = ta.machine_id
              LEFT JOIN {$t['companies']} c ON c.id = m.company_id
              $sql_where
-             ORDER BY FIELD(ta.status,'en_progreso','pendiente','completada'),
+             ORDER BY FIELD(ta.status,'en_progreso','pendiente','sin_formato','completada'),
                       ta.due_date IS NULL, ta.due_date ASC, ta.id DESC
              LIMIT 300"
         );
@@ -482,7 +493,8 @@ class CMH_Time {
             if ( $r->status === 'completada' ) continue;
             $open++;
             if ( $r->status === 'en_progreso' ) $doing++;
-            if ( $r->due_date && $r->due_date < $today ) $late++;
+            // v2.9 — Lo que solo espera el formato ya se hizo: no está vencido.
+            if ( $r->status !== 'sin_formato' && $r->due_date && $r->due_date < $today ) $late++;
         }
 
         echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Tareas del equipo</h2>'
@@ -510,7 +522,7 @@ class CMH_Time {
             . '</tr></thead><tbody>';
 
         foreach ( $rows as $r ) {
-            $late_row = ( $r->status !== 'completada' && $r->due_date && $r->due_date < $today );
+            $late_row = ( ! in_array( $r->status, [ 'completada', 'sin_formato' ], true ) && $r->due_date && $r->due_date < $today );
             $back     = self::page_url( $f );
 
             echo '<tr>'

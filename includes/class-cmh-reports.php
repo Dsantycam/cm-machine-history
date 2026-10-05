@@ -528,7 +528,9 @@ class CMH_Reports {
         $acc = [];
         foreach ( $rows as $r ) {
             $keys = CMH_Taxonomy::systems_from_string( $r->sistema );
-            if ( ! $keys ) $keys = [ '' ];   // sin especificar
+            // v2.9 — Sin sistema registrado no se inventa una barra «Sin especificar»:
+            // si el formato no trae sistema, simplemente no se muestra.
+            if ( ! $keys ) continue;
             foreach ( $keys as $key ) {
                 if ( ! isset( $acc[ $key ] ) ) $acc[ $key ] = [ 'n' => 0, 'dt' => 0.0 ];
                 $acc[ $key ]['n']++;
@@ -563,9 +565,10 @@ class CMH_Reports {
         list( $where, $sparams ) = self::scope( $f );
         $params = array_merge( [ self::date_start( $f ), self::date_end( $f ) ], $sparams );
 
-        $expr_done   = "tk.status='completada'";
-        $expr_ontime = "tk.status='completada' AND tk.updated_at IS NOT NULL AND DATE(tk.updated_at) <= tk.due_date";
-        $expr_late   = "tk.status<>'completada' AND tk.due_date < CURDATE()";
+        // v2.9 — «Completada sin formato» es trabajo hecho: cuenta como ejecutada.
+        $expr_done   = "tk.status IN ('completada','sin_formato')";
+        $expr_ontime = "tk.status IN ('completada','sin_formato') AND tk.updated_at IS NOT NULL AND DATE(tk.updated_at) <= tk.due_date";
+        $expr_late   = "tk.status NOT IN ('completada','sin_formato') AND tk.due_date < CURDATE()";
 
         $totals = $wpdb->get_row( $wpdb->prepare(
             "SELECT COUNT(*) programadas,
@@ -793,6 +796,16 @@ class CMH_Reports {
         $mtbf  = $av > 0 && $base > 0 ? round( max( 0, $base - $dt ) / $av, 2 ) : null;
         $acc   = $avail === null ? 'blue' : ( $avail >= 90 ? 'ok' : ( $avail >= 70 ? 'warn' : 'danger' ) );
 
+        // v2.9 — En el portal, los cuadros con lista detrás llevan a ella con el
+        // mismo alcance y periodo. Al administrador no le cambia nada.
+        $u = function ( $extra = [] ) use ( $f ) {
+            if ( ! self::is_client() ) return '';
+            return CMH_Client::interv_url( array_merge( [
+                'company_id' => $f['company_id'], 'city_id' => $f['city_id'], 'machine_id' => $f['machine_id'],
+                'from' => $f['from'], 'to' => $f['to'],
+            ], $extra ) );
+        };
+
         echo '<div class="cmh-grid">';
         CMH_Admin::metric_card( 'Disponibilidad', CMH_Metrics::fmt_pct( $avail ), 'periodo completo', $acc );
         CMH_Admin::metric_card( 'MTTR', CMH_Metrics::fmt_mttr( $mttr ), 'promedio por avería', 'warn' );
@@ -802,17 +815,17 @@ class CMH_Reports {
             CMH_Admin::metric_card( 'Cumplimiento preventivo', self::pct( $comp['pct'] ),
                 $comp['programadas'] . ' programado(s)', $cacc );
         }
-        CMH_Admin::metric_card( 'Intervenciones', (int) $totals->total,       'en el periodo', 'blue' );
-        CMH_Admin::metric_card( 'Preventivos',    (int) $totals->preventivos, 'en el periodo', 'ok' );
-        CMH_Admin::metric_card( 'Averías',        $av,                        'en el periodo', 'danger' );
-        CMH_Admin::metric_card( 'Horas parada',   self::hours( $totals->dt_averia ), 'por averías', 'danger' );
-        CMH_Admin::metric_card( self::L( 'costo_total' ), self::money( $totals->costo ),  'en el periodo', 'blue' );
-        CMH_Admin::metric_card( self::L( 'pagado' ),      self::money( $totals->pagado ), 'en el periodo', 'ok' );
+        CMH_Admin::metric_card( 'Intervenciones', (int) $totals->total,       'en el periodo', 'blue', $u() );
+        CMH_Admin::metric_card( 'Preventivos',    (int) $totals->preventivos, 'en el periodo', 'ok', $u( [ 'type' => 'preventivo' ] ) );
+        CMH_Admin::metric_card( 'Averías',        $av,                        'en el periodo', 'danger', $u( [ 'affects' => 1 ] ) );
+        CMH_Admin::metric_card( 'Horas parada',   self::hours( $totals->dt_averia ), 'por averías', 'danger', $u( [ 'affects' => 1 ] ) );
+        CMH_Admin::metric_card( self::L( 'costo_total' ), self::money( $totals->costo ),  'en el periodo', 'blue', $u() );
+        CMH_Admin::metric_card( self::L( 'pagado' ),      self::money( $totals->pagado ), 'en el periodo', 'ok', $u( [ 'pay' => 'paid' ] ) );
         CMH_Admin::metric_card( self::L( 'por_cobrar' ),  self::money( $totals->por_cobrar ),
-            self::L( 'saldo_hint' ), (float) $totals->por_cobrar > 0 ? 'warn' : 'ok' );
+            self::L( 'saldo_hint' ), (float) $totals->por_cobrar > 0 ? 'warn' : 'ok', $u( [ 'pay' => 'pending' ] ) );
         if ( CMH_Taxonomy::quote_pstates() ) {
             CMH_Admin::metric_card( self::L( 'en_tramite' ), self::money( $totals->en_tramite ),
-                self::L( 'tramite_hint' ), 'blue' );
+                self::L( 'tramite_hint' ), 'blue', $u( [ 'pay' => 'quote' ] ) );
         }
         echo '</div>';
     }
@@ -1132,13 +1145,13 @@ class CMH_Reports {
             echo '<tr>'
                 . '<td>' . esc_html( $r->intervention_date ) . '</td>'
                 . '<td><a href="' . esc_url( self::machine_url( (int) $r->machine_id ) ) . '">' . esc_html( $r->machine_code ) . '</a></td>'
-                . '<td>' . esc_html( ucfirst( $r->maintenance_type ?: $r->form_type ) ) . '</td>'
+                . '<td>' . CMH_Taxonomy::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' ) . '</td>'
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td>' . esc_html( $sys ) . '</td>'
                 . '<td>' . esc_html( self::hours( $r->downtime_hours ) ) . '</td>'
                 . '<td>' . esc_html( self::money( $r->cost ) ) . '</td>'
                 . '<td>' . CMH_Admin::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) . '</td>'
-                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( $r->file_url ) . '">Ver</a>' : '—' ) . '</td>'
+                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>'
                 . '</tr>';
         }
         echo '</tbody></table></div>';
@@ -1418,6 +1431,9 @@ class CMH_Reports {
             'dim'        => $f['dim'],
             'from'       => $f['from'],
             'to'         => $f['to'],
+            // v2.9 — Marca que la exportación sale del portal: un administrador
+            // que también es cliente exporta ahí con su alcance, no con todo.
+            'portal'     => self::is_client() ? 1 : 0,
         ] ) ), 'cmh_action' );
     }
 
@@ -1425,7 +1441,8 @@ class CMH_Reports {
         check_admin_referer( 'cmh_action' );
 
         // Un cliente exporta lo mismo que ve: se le impone su ACL antes de consultar.
-        if ( current_user_can( 'edit_others_posts' ) ) {
+        $from_portal = ! empty( $_GET['portal'] ) && current_user_can( 'cmh_client' );
+        if ( current_user_can( 'edit_others_posts' ) && ! $from_portal ) {
             self::reset_context();
         } elseif ( current_user_can( 'cmh_client' ) ) {
             CMH_Client::apply_report_context();

@@ -142,6 +142,7 @@ class CMH_Core {
             paid_amount          DECIMAL(14,2)   NOT NULL DEFAULT 0,
             affects_availability TINYINT(1)      NOT NULL DEFAULT 0,
             failure_system       VARCHAR(190)    NULL,
+            mtto_level           VARCHAR(120)    NULL,
             parts                TEXT            NULL,
             services             TEXT            NULL,
             observations         TEXT            NULL,
@@ -333,11 +334,101 @@ class CMH_Core {
     public static function init() {
         add_filter( 'woocommerce_prevent_admin_access', [ __CLASS__, 'allow_admin_access' ] );
         add_filter( 'woocommerce_disable_admin_bar',    [ __CLASS__, 'allow_admin_access' ] );
+
+        // v2.9 — Roles adicionales en el perfil del usuario.
+        add_action( 'show_user_profile', [ __CLASS__, 'extra_roles_field' ] );
+        add_action( 'edit_user_profile', [ __CLASS__, 'extra_roles_field' ] );
+        add_action( 'profile_update',    [ __CLASS__, 'save_extra_roles' ], 20 );
     }
 
     /** Devuelve false (no bloquear) si el usuario actual es técnico o cliente del plugin. */
     public static function allow_admin_access( $prevent ) {
         return self::is_cmh_panel_user() ? false : $prevent;
+    }
+
+    /**
+     * v2.9 — ¿El usuario TIENE este rol? Mira los roles, no las capacidades.
+     *
+     * Hace falta porque el administrador recibe `cmh_tech` y `cmh_client` para
+     * poder previsualizar los paneles: preguntar por la capacidad no distingue
+     * a un administrador cualquiera de uno que además trabaja como técnico.
+     */
+    public static function has_role( $role, $user_id = 0 ) {
+        $user = $user_id ? get_userdata( (int) $user_id ) : wp_get_current_user();
+        return $user && $user->exists() && in_array( $role, (array) $user->roles, true );
+    }
+
+    /**
+     * v2.9 — ¿Este usuario trabaja como técnico? Sí si tiene el rol, o si tiene
+     * la capacidad sin ser administrador (un rol propio al que se le dio).
+     */
+    public static function is_tech_user( $user_id = 0 ) {
+        $user_id = $user_id ?: get_current_user_id();
+        if ( ! $user_id ) return false;
+        if ( self::has_role( 'cmh_technician', $user_id ) ) return true;
+        return user_can( $user_id, 'cmh_tech' ) && ! user_can( $user_id, 'edit_others_posts' );
+    }
+
+    /** v2.9 — Lo mismo para el portal del cliente. */
+    public static function is_client_user( $user_id = 0 ) {
+        $user_id = $user_id ?: get_current_user_id();
+        if ( ! $user_id ) return false;
+        if ( self::has_role( 'cmh_client', $user_id ) ) return true;
+        return user_can( $user_id, 'cmh_client' ) && ! user_can( $user_id, 'edit_others_posts' );
+    }
+
+    // -------------------------------------------------------------------------
+    // v2.9 — Roles adicionales desde el perfil del usuario
+    // -------------------------------------------------------------------------
+
+    /**
+     * WordPress solo deja elegir UN rol en la pantalla de usuario. Para que un
+     * administrador pueda ser también técnico o cliente (o las tres cosas), el
+     * perfil gana dos casillas que suman el rol del plugin sin tocar el principal.
+     */
+    public static function extra_roles_field( $user ) {
+        if ( ! current_user_can( 'promote_users' ) ) return;
+        $roles = [ 'cmh_technician' => 'Técnico (CM) — ve «Mis Máquinas» y sus tareas',
+                   'cmh_client'     => 'Cliente (CM) — ve «Mis Equipos» de las empresas que se le asignen' ];
+
+        echo '<h2>Historial de Máquinas — roles adicionales</h2>'
+            . '<table class="form-table" role="presentation"><tr><th>Además de su rol, es</th><td>'
+            . wp_nonce_field( 'cmh_extra_roles', 'cmh_extra_roles_nonce', true, false )
+            . '<input type="hidden" name="cmh_extra_roles_sent" value="1">';
+        foreach ( $roles as $role => $label ) {
+            if ( ! get_role( $role ) ) continue;
+            echo '<label style="display:block;margin-bottom:6px"><input type="checkbox" name="cmh_extra_roles[]" value="' . esc_attr( $role ) . '" '
+                . checked( in_array( $role, (array) $user->roles, true ), true, false ) . '> ' . esc_html( $label ) . '</label>';
+        }
+        echo '<p class="description">Un usuario puede tener varios: por ejemplo, un administrador que también hace tareas de técnico ve los dos menús.</p>'
+            . '</td></tr></table>';
+    }
+
+    /**
+     * Se aplica en `profile_update`, DESPUÉS de que WordPress guarde el rol
+     * principal: `set_role()` borra los roles extra, así que hacerlo antes no
+     * serviría de nada.
+     */
+    public static function save_extra_roles( $user_id ) {
+        if ( empty( $_POST['cmh_extra_roles_sent'] ) ) return;
+        if ( ! current_user_can( 'promote_users' ) || ! current_user_can( 'edit_user', $user_id ) ) return;
+        if ( ! isset( $_POST['cmh_extra_roles_nonce'] )
+             || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['cmh_extra_roles_nonce'] ) ), 'cmh_extra_roles' ) ) return;
+
+        $user = get_userdata( (int) $user_id );
+        if ( ! $user ) return;
+
+        $wanted = array_map( 'sanitize_key', (array) ( $_POST['cmh_extra_roles'] ?? [] ) );
+        foreach ( [ 'cmh_technician', 'cmh_client' ] as $role ) {
+            if ( ! get_role( $role ) ) continue;
+            $has = in_array( $role, (array) $user->roles, true );
+            if ( in_array( $role, $wanted, true ) && ! $has ) {
+                $user->add_role( $role );
+            } elseif ( ! in_array( $role, $wanted, true ) && $has && count( $user->roles ) > 1 ) {
+                // Nunca se deja al usuario sin ningún rol.
+                $user->remove_role( $role );
+            }
+        }
     }
 
     /** ¿El usuario actual entra por alguno de los paneles del plugin? */
@@ -419,6 +510,13 @@ class CMH_Core {
         if ( $installed !== CMH_VERSION ) {
             self::activate();
             delete_option( 'cmh_machine_history_version' );
+
+            // v2.9 — Las máquinas cuya tarea de mantenimiento ya estaba cerrada
+            // dejan de figurar como vencidas. Corre una sola vez, al subir.
+            if ( $installed && version_compare( $installed, '2.9.0', '<' ) && class_exists( 'CMH_Schedule' ) ) {
+                $n = CMH_Schedule::repair_done_maintenance();
+                if ( $n ) self::log( 'info', null, '', null, 'v2.9: ' . $n . ' máquina(s) con mantenimiento ya hecho dejaron de figurar como vencidas.' );
+            }
         }
     }
 

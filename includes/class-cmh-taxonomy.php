@@ -40,6 +40,10 @@ class CMH_Taxonomy {
     const OPTION_MTYPES  = 'cmh_mtypes';
     const OPTION_PSTATES = 'cmh_pstates';
     const OPTION_SYSTEMS = 'cmh_systems';
+    const OPTION_MLEVELS = 'cmh_mlevels';   // v2.9 — 250H, 500H… («MTTO PREVENTIVO 250H»)
+
+    /** Lo que antecede a cada tipo de mantenimiento preventivo al mostrarlo. */
+    const MLEVEL_PREFIX = 'MTTO PREVENTIVO';
 
     /** Paleta compartida por ambas listas, para no inventar colores sueltos. */
     const COLORS = [
@@ -106,8 +110,18 @@ class CMH_Taxonomy {
         return $out;
     }
 
-    public static function mtype_badge( $slug ) {
-        return self::badge( self::mtype_label( $slug ), self::mtypes()[ strtolower( (string) $slug ) ]['color'] ?? 'gray' );
+    /**
+     * v2.9 — Si la intervención trae tipo de mantenimiento preventivo (250H…),
+     * el badge dice «MTTO PREVENTIVO 250H» en vez del genérico «Preventivo».
+     */
+    public static function mtype_badge( $slug, $level = '' ) {
+        $color = self::mtypes()[ strtolower( (string) $slug ) ]['color'] ?? 'gray';
+        $base  = self::badge( self::mtype_label( $slug ), $color );
+        if ( (string) $level === '' ) return $base;
+        if ( strtolower( (string) $slug ) === 'preventivo' ) return self::badge( self::mlevel_label( $level ), $color );
+        // Otro tipo con nivel (una avería que el formato marcó como tal): se ven
+        // los dos, para no hacer pasar una avería por preventivo.
+        return $base . ' ' . self::badge( self::mlevel_label( $level ), 'gray' );
     }
 
     // =========================================================================
@@ -358,7 +372,79 @@ class CMH_Taxonomy {
     }
 
     // =========================================================================
-    // Plumbing común a las tres listas
+    // Tipos de mantenimiento preventivo (v2.9)
+    //
+    // 250H, 500H, 1000H… Se escribe solo lo que va después del prefijo: en
+    // pantalla, reportes y CSV siempre se lee «MTTO PREVENTIVO 250H». Funciona
+    // igual que los sistemas: se mapea en cada formato y, si un formato no lo
+    // trae, la intervención simplemente no lo muestra.
+    // =========================================================================
+
+    public static function mlevel_seed() {
+        return [
+            '250h'  => [ 'label' => '250H',  'color' => 'ok' ],
+            '500h'  => [ 'label' => '500H',  'color' => 'ok' ],
+            '1000h' => [ 'label' => '1000H', 'color' => 'ok' ],
+            '2000h' => [ 'label' => '2000H', 'color' => 'ok' ],
+        ];
+    }
+
+    public static function mlevels() {
+        return self::read_list( 'mlevels' );
+    }
+
+    /** [ slug => «MTTO PREVENTIVO 250H» ], para los desplegables. */
+    public static function mlevel_labels() {
+        $out = [];
+        foreach ( self::mlevels() as $slug => $cfg ) $out[ $slug ] = self::MLEVEL_PREFIX . ' ' . $cfg['label'];
+        return $out;
+    }
+
+    /** «MTTO PREVENTIVO 250H». Vacío si no hay nivel. */
+    public static function mlevel_label( $slug ) {
+        $slug = strtolower( (string) $slug );
+        if ( $slug === '' ) return '';
+        $all  = self::mlevels();
+        // Un nivel borrado que sigue en intervenciones viejas se muestra con su clave.
+        $name = $all[ $slug ]['label'] ?? strtoupper( str_replace( '_', ' ', $slug ) );
+        return self::MLEVEL_PREFIX . ' ' . $name;
+    }
+
+    /**
+     * Clave de un nivel, dándolo de alta si no existía —igual que ensure_system—.
+     * Si el formato ya trae el prefijo («MTTO PREVENTIVO 250H»), se quita para
+     * no guardarlo dos veces.
+     */
+    public static function ensure_mlevel( $label ) {
+        $label = trim( (string) $label );
+        $label = trim( preg_replace( '/^\s*(mtto\.?|mantenimiento)\s+preventivo\s*/iu', '', $label ) );
+        // «3000 h» y «3000H» son lo mismo: se escribe pegado, como el resto.
+        $label = preg_replace( '/(\d)\s+h\b/iu', '$1H', $label );
+        $slug  = self::slugify( $label );
+        if ( $slug === '' ) return '';
+
+        $all = self::mlevels();
+        if ( isset( $all[ $slug ] ) ) return $slug;
+        foreach ( $all as $k => $cfg ) {
+            if ( self::mlevel_key( $cfg['label'] ) === self::mlevel_key( $label ) ) return $k;
+        }
+
+        $all[ $slug ] = [ 'label' => strtoupper( $label ), 'color' => 'ok' ];
+        update_option( self::OPTION_MLEVELS, $all, true );
+        return $slug;
+    }
+
+    /**
+     * Forma comparable de un nivel: sin prefijo, espacios ni signos.
+     * «MTTO PREVENTIVO 250 H», «250h» y «250H» dan lo mismo.
+     */
+    public static function mlevel_key( $value ) {
+        $v = preg_replace( '/^\s*(mtto\.?|mantenimiento)\s+preventivo\s*/iu', '', (string) $value );
+        return strtolower( preg_replace( '/[^a-z0-9]/i', '', remove_accents( $v ) ) );
+    }
+
+    // =========================================================================
+    // Plumbing común a las listas
     // =========================================================================
 
     /**
@@ -367,6 +453,18 @@ class CMH_Taxonomy {
      */
     private static function list_config( $which ) {
         switch ( $which ) {
+            case 'mlevels':
+                return [
+                    'option' => self::OPTION_MLEVELS, 'seed' => 'mlevel_seed', 'extra' => '',
+                    'title'  => 'Tipos de mantenimiento preventivo',
+                    'column' => 'mtto_level',
+                    'head'   => '',
+                    'ph'     => '250H, 500H, 3000H…',
+                    'intro'  => 'Escribe solo lo que va después de <strong>' . self::MLEVEL_PREFIX . '</strong>: si pones «250H», en la ficha, los reportes y el CSV se verá «' . self::MLEVEL_PREFIX . ' 250H». '
+                              . 'Se mapea en cada formato, igual que los sistemas, desde «Máquinas → Formatos». Un formato que no lo traiga simplemente no lo muestra. '
+                              . 'Una intervención con tipo de mantenimiento preventivo se registra como <strong>Preventivo</strong> (salvo que el formato la haya marcado como avería).',
+                    'foot'   => 'Si retiras uno, las intervenciones que ya lo tenían lo conservan.',
+                ];
             case 'mtypes':
                 return [
                     'option' => self::OPTION_MTYPES,  'seed' => 'mtype_seed',  'extra' => 'affects',
@@ -482,7 +580,7 @@ class CMH_Taxonomy {
     /** Cuántas intervenciones usan una clave. Sirve para avisar antes de borrar. */
     public static function usage_counts( $column ) {
         global $wpdb; $t = CMH_Core::tables();
-        $allowed = [ 'maintenance_type', 'payment_status', 'failure_system' ];
+        $allowed = [ 'maintenance_type', 'payment_status', 'failure_system', 'mtto_level' ];
         if ( ! in_array( $column, $allowed, true ) ) $column = 'maintenance_type';
 
         $rows = $wpdb->get_results(
@@ -531,7 +629,7 @@ class CMH_Taxonomy {
     }
 
     public static function render_settings_panels() {
-        foreach ( [ 'mtypes', 'pstates', 'systems' ] as $which ) self::render_list_panel( $which );
+        foreach ( [ 'mtypes', 'pstates', 'systems', 'mlevels' ] as $which ) self::render_list_panel( $which );
     }
 
     private static function render_list_panel( $which ) {
@@ -596,7 +694,7 @@ class CMH_Taxonomy {
     public static function save_taxonomy() {
         CMH_Admin::check();
         $which = sanitize_key( $_POST['which'] ?? '' );
-        if ( ! in_array( $which, [ 'mtypes', 'pstates', 'systems' ], true ) ) $which = 'mtypes';
+        if ( ! in_array( $which, [ 'mtypes', 'pstates', 'systems', 'mlevels' ], true ) ) $which = 'mtypes';
 
         $c     = self::list_config( $which );
         $saved = self::save_list( $which, $_POST['rows'] ?? [] );

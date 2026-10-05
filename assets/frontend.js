@@ -6,6 +6,12 @@
  * v2.0   — el mismo relleno se puede disparar desde la URL: al abrir el formato
  *          desde una tarea, el enlace trae ?cmh_machine=CODIGO y el formulario
  *          llega listo, sin que el técnico escriba nada.
+ * v2.9   — SOLO se prellena lo configurado en «Máquinas → Formatos». Se quitó el
+ *          relleno que adivinaba por el texto de la etiqueta («marca», «contacto»,
+ *          «horómetro»…) y el del campo de contacto: venían de antes de que
+ *          existiera esa pantalla y llenaban campos que nadie había pedido. Al
+ *          escribir el código a mano, el servidor devuelve el mismo mapeo
+ *          configurado que usa el prellenado desde la URL.
  */
 (function ($) {
     'use strict';
@@ -15,86 +21,61 @@
     var ajaxurl = CMHFront.ajaxurl;
     var configs = CMHFront.formConfigs || {};
 
-    // Campos de máquina que podemos rellenar, mapeados a posibles textos de etiqueta.
-    // v1.0.1 — las claves deben ser específicas: el match es por CONTENIDO de la
-    // etiqueta, así que una palabra suelta como 'horas' capturaba también
-    // «¿Cuántas horas estuvo detenida la máquina?» y le metía el horómetro.
-    var labelMap = {
-        brand:             ['marca', 'brand', 'fabricante'],
-        model:             ['modelo', 'model', 'tipo de equipo', 'tipo de máquina', 'tipo de maquina'],
-        serial:            ['serial', 'serie', 'número de serie', 'no. serie', 'n° serie', 'no serie'],
-        contact:           ['contacto', 'contact', 'encargado', 'operador', 'responsable'],
-        current_hourmeter: ['horómetro', 'horometro', 'hourmeter', 'odómetro', 'odometro', 'km'],
-        company_name:      ['empresa', 'company', 'cliente', 'razón social', 'razon social'],
-        city_name:         ['ciudad', 'sucursal', 'sede', 'ubicación', 'ubicacion', 'city'],
-    };
-
-    // v1.0.1 — Etiquetas que NUNCA se autocompletan aunque coincida alguna clave.
-    // Son campos que llena el técnico: tiempos de parada, horas trabajadas, etc.
-    var labelBlocklist = [
-        'detenid', 'parada', 'parado', 'inactiv', 'trabajad', 'duración', 'duracion',
-        'cuánto', 'cuanto', 'cuántas', 'cuantas', 'cuántos', 'cuantos', 'firma',
-    ];
-
-    function isBlocked(labelText) {
-        return labelBlocklist.some(function (kw) {
-            return labelText.indexOf(kw) !== -1;
-        });
-    }
-
-    // Campo machine_field → contact_field (del config, como respaldo explícito)
+    // Campo de máquina de cada formato → id del formato.
     var fieldMap = {};
     Object.keys(configs).forEach(function (formId) {
         var cfg = configs[formId];
         if (cfg.machine_field) {
-            fieldMap[cfg.machine_field] = {
-                contact: cfg.contact_field || null,
-            };
+            fieldMap[cfg.machine_field] = fieldMap[cfg.machine_field] || [];
+            fieldMap[cfg.machine_field].push(formId);
         }
     });
 
-    /**
-     * Intenta rellenar un campo por texto de etiqueta.
-     * Busca en .forminator-row y .forminator-field-container para ser compatible
-     * con distintas versiones de Forminator.
-     */
-    function fillByLabels($form, machineData) {
-        // Selectores de fila/bloque en Forminator
-        var rowSel = '.forminator-row, .forminator-field-container, .forminator-col';
-
-        $form.find(rowSel).each(function () {
-            var $row      = $(this);
-            var labelText = $row.find('label, .forminator-label').first().text().trim().toLowerCase();
-            if (!labelText) return;
-            if (isBlocked(labelText)) return;
-
-            Object.keys(labelMap).forEach(function (prop) {
-                var val = machineData[prop];
-                if (!val) return;
-
-                var matches = labelMap[prop].some(function (kw) {
-                    return labelText.indexOf(kw) !== -1;
-                });
-
-                if (matches) {
-                    var $inp = $row.find('input[type="text"], input[type="number"], input:not([type]), textarea').first();
-                    if ($inp.length && !$inp.val()) {
-                        $inp.val(val).trigger('change input');
-                    }
-                }
-            });
-        });
+    /** ¿Este <form> es el formato `formId` de Forminator? */
+    function isForm($form, formId) {
+        return $form.attr('id') === 'forminator-module-' + formId
+            || String($form.data('form-id')) === String(formId)
+            || $form.closest('#forminator-module-' + formId).length > 0;
     }
 
     /**
-     * Rellena el campo de contacto por slug configurado (respaldo directo).
+     * Escribe un mapa { slug: valor } dentro de $scope.
+     *
+     * No pisa lo que el usuario escribió. Sí reemplaza lo que pusimos nosotros
+     * mismos: si se cambia el código de máquina, los datos de la anterior no
+     * deben quedarse en el formulario.
      */
-    function fillContactBySlug($form, machineData, contactFieldName) {
-        if (!contactFieldName || !machineData.contact) return;
-        var $f = $form.find('[name="' + contactFieldName + '"]');
-        if ($f.length && !$f.val()) {
-            $f.val(machineData.contact).trigger('change input');
-        }
+    function writeMap($scope, map) {
+        var applied = false;
+        Object.keys(map).forEach(function (slug) {
+            var $f = $scope.find('[name="' + slug + '"]');
+            if (!$f.length) return;
+
+            var cur  = $f.val();
+            var ours = $f.data('cmhPrefillValue');
+            if (cur && cur !== ours) return;
+
+            $f.data('cmhPrefillValue', String(map[slug])).val(map[slug]).trigger('change');
+            applied = true;
+        });
+        return applied;
+    }
+
+    /** Aplica el prellenado de cada formato que esté en la página. */
+    function applyPrefill(prefill, $onlyForm) {
+        var applied = false;
+        Object.keys(prefill || {}).forEach(function (formId) {
+            var $scope;
+            if ($onlyForm) {
+                if (!isForm($onlyForm, formId)) return;
+                $scope = $onlyForm;
+            } else {
+                $scope = $('#forminator-module-' + formId);
+                if (!$scope.length) $scope = $(document);
+            }
+            if (writeMap($scope, prefill[formId])) applied = true;
+        });
+        return applied;
     }
 
     /** Pinta el aviso verde/rojo bajo el campo de máquina. */
@@ -102,9 +83,9 @@
         if (ok) {
             var m = machineOrCode;
             $hint.css({ color: '#00a32a', background: '#e7f7ed' }).html(
-                '<strong>✓ ' + (m.brand || '') + ' ' + (m.model || '') + '</strong> — ' +
-                (m.company_name || '') + (m.city_name ? ' / ' + m.city_name : '') +
-                (m.serial ? '<br><small>Serial: ' + m.serial + '</small>' : '')
+                '<strong>✓ ' + esc(m.brand) + ' ' + esc(m.model) + '</strong> — ' +
+                esc(m.company_name) + (m.city_name ? ' / ' + esc(m.city_name) : '') +
+                (m.serial ? '<br><small>Serial: ' + esc(m.serial) + '</small>' : '')
             ).show();
         } else {
             $hint.css({ color: '#d63638', background: '#fdeaea' })
@@ -112,12 +93,15 @@
         }
     }
 
+    function esc(v) {
+        return $('<div>').text(v == null ? '' : String(v)).html();
+    }
+
     /**
-     * Consulta la máquina y rellena el formulario.
-     * Es el único camino de relleno: lo usan tanto el autocompletado al escribir
-     * como el prellenado desde la URL.
+     * Consulta la máquina, muestra el aviso y aplica el prellenado configurado
+     * para el formato en el que se escribió el código.
      */
-    function lookupAndFill(code, $form, cfg, $hint) {
+    function lookupAndFill(code, $form, $hint) {
         $.get(ajaxurl, { action: 'cmh_get_machine', code: code })
             .done(function (resp) {
                 if (!resp || !resp.success) {
@@ -125,8 +109,7 @@
                     return;
                 }
                 if ($hint) showHint($hint, true, resp.data);
-                fillByLabels($form, resp.data);
-                fillContactBySlug($form, resp.data, cfg && cfg.contact ? cfg.contact : null);
+                applyPrefill(resp.data.prefill || {}, $form);
             })
             .fail(function () { if ($hint) $hint.hide(); });
     }
@@ -138,7 +121,7 @@
         }).insertAfter($input);
     }
 
-    function attachAutocomplete($input, cfg) {
+    function attachAutocomplete($input) {
         if ($input.data('cmhBound')) return;
         $input.data('cmhBound', true);
 
@@ -159,7 +142,7 @@
 
             timer = setTimeout(function () {
                 $input.data('cmhLastCode', code);
-                lookupAndFill(code, $form, cfg, $hint);
+                lookupAndFill(code, $form, $hint);
             }, 600);
         });
     }
@@ -172,39 +155,9 @@
     }
 
     /**
-     * v2.0 — Aplica los valores que el servidor ya resolvió para este formato.
-     *
-     * `CMHFront.prefill` llega como { form_id: { slug: valor } } según el mapeo
-     * configurado en «Máquinas → Formatos». El navegador no decide nada: solo
-     * escribe. Si el formulario está en la página se busca dentro de su contenedor
-     * para no pisar campos de otro formulario que comparta nombres de slug.
-     */
-    function applyServerPrefill() {
-        var prefill = CMHFront.prefill || {};
-        var applied = false;
-
-        Object.keys(prefill).forEach(function (formId) {
-            var $scope = $('#forminator-module-' + formId);
-            if (!$scope.length) $scope = $(document);
-
-            Object.keys(prefill[formId]).forEach(function (slug) {
-                var $f = $scope.find('[name="' + slug + '"]');
-                if (!$f.length) $f = $('[name="' + slug + '"]');
-                if (!$f.length || $f.data('cmhPrefilled')) return;
-
-                // No se pisa lo que el usuario ya escribió.
-                if ($f.val()) { $f.data('cmhPrefilled', true); return; }
-
-                $f.data('cmhPrefilled', true).val(prefill[formId][slug]).trigger('change');
-                applied = true;
-            });
-        });
-        return applied;
-    }
-
-    /**
-     * Escribe el código en el campo de máquina y dispara el relleno completo.
-     * Devuelve true si encontró el campo.
+     * Engancha el aviso al campo de máquina y aplica el prellenado que el
+     * servidor ya resolvió (CMHFront.prefill). Devuelve true si encontró algo
+     * del formulario en la página.
      */
     function prefillMachine(code) {
         var found = false;
@@ -212,29 +165,34 @@
         Object.keys(fieldMap).forEach(function (fieldName) {
             $('[name="' + fieldName + '"]').each(function () {
                 var $input = $(this);
-                if ($input.data('cmhMachinePrefilled')) { found = true; return; }
-                $input.data('cmhMachinePrefilled', true);
                 found = true;
+                if ($input.data('cmhMachinePrefilled')) return;
+                $input.data('cmhMachinePrefilled', true);
 
-                attachAutocomplete($input, fieldMap[fieldName]);
-
-                // Se marca como ya consultado ANTES de disparar 'change': el evento
-                // se lanza para que la lógica condicional de Forminator reaccione,
-                // pero no debe provocar una segunda consulta de la misma máquina.
+                attachAutocomplete($input);
+                // Se marca como ya consultado: el prellenado viene resuelto del
+                // servidor y no hace falta pedir la misma máquina por AJAX.
                 $input.data('cmhLastCode', code);
-                $input.val(code).trigger('change');
 
-                // El relleno se dispara de una, sin esperar el debounce de escritura.
-                lookupAndFill(
-                    code,
-                    $input.closest('form'),
-                    fieldMap[fieldName],
-                    $input.next('.cmh-machine-hint')
-                );
+                // El código va siempre al campo de máquina: es a lo que vino el
+                // enlace, y sin él el envío no se puede registrar.
+                if (!$input.val()) {
+                    $input.data('cmhPrefillValue', code).val(code).trigger('change');
+                }
             });
         });
 
-        applyServerPrefill();
+        if (applyPrefill(CMHFront.prefill || {})) found = true;
+
+        // El aviso verde bajo el campo, para que el técnico confirme la máquina.
+        if (found && CMHFront.machine) {
+            Object.keys(fieldMap).forEach(function (fieldName) {
+                $('[name="' + fieldName + '"]').each(function () {
+                    var $hint = $(this).next('.cmh-machine-hint');
+                    if ($hint.length && !$hint.is(':visible')) showHint($hint, true, CMHFront.machine);
+                });
+            });
+        }
         return found;
     }
 
@@ -256,7 +214,7 @@
     $(function () {
         Object.keys(fieldMap).forEach(function (fieldName) {
             $('[name="' + fieldName + '"]').each(function () {
-                attachAutocomplete($(this), fieldMap[fieldName]);
+                attachAutocomplete($(this));
             });
         });
 

@@ -141,7 +141,18 @@ class CMH_Schedule {
         $interval = (int) $wpdb->get_var( $wpdb->prepare(
             "SELECT maintenance_interval_days FROM {$t['machines']} WHERE id=%d", $machine_id
         ) );
-        if ( $interval < 1 ) return '';
+        if ( $interval < 1 ) {
+            // v2.9 — Sin recurrencia, el preventivo que se acaba de hacer ES el
+            // programado si su fecha ya llegó o está dentro de la ventana de
+            // aviso: se limpia la fecha para que la máquina no siga «vencida».
+            $due = $wpdb->get_var( $wpdb->prepare(
+                "SELECT next_maintenance_date FROM {$t['machines']} WHERE id=%d", $machine_id
+            ) );
+            $base  = $intervention_date ?: current_time( 'Y-m-d' );
+            $limit = date( 'Y-m-d', strtotime( $base . ' +' . max( 0, (int) self::setting( 'alert_days_before' ) ) . ' days' ) );
+            if ( $due && $due <= $limit ) self::clear_next_maintenance( $machine_id );
+            return '';
+        }
 
         $base = $intervention_date ?: current_time( 'Y-m-d' );
         $next = date( 'Y-m-d', strtotime( $base . ' +' . $interval . ' days' ) );
@@ -152,6 +163,80 @@ class CMH_Schedule {
         );
         CMH_Schedule::sync_machine_task( (int) $machine_id );
         return $next;
+    }
+
+    /** v2.9 — Quita la fecha de próximo mantenimiento (ya se hizo, y no hay recurrencia). */
+    private static function clear_next_maintenance( $machine_id ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $wpdb->update( $t['machines'],
+            [ 'next_maintenance_date' => null, 'updated_at' => current_time( 'mysql' ) ],
+            [ 'id' => (int) $machine_id ]
+        );
+        self::sync_machine_task( (int) $machine_id );
+    }
+
+    /**
+     * v2.9 — Se cerró (o se dio por hecha sin formato) una tarea. Si era la del
+     * mantenimiento programado, ese mantenimiento ya se hizo.
+     *
+     * Hasta ahora la tarea quedaba «Completada», pero la máquina conservaba la
+     * fecha vieja y seguía apareciendo como «Mant. vencido» en la ficha, el
+     * dashboard, el portal y los correos. Solo un preventivo registrado movía
+     * esa fecha, y solo si la máquina tenía recurrencia.
+     *
+     * Ahora, si la máquina sigue apuntando a la fecha de ESA tarea:
+     *   - con recurrencia, la próxima fecha se calcula desde hoy;
+     *   - sin recurrencia, la fecha se limpia.
+     * Si la fecha ya había cambiado (por ejemplo, porque llegó el preventivo),
+     * no se toca nada.
+     *
+     * @param object $task      Fila de la tarea ANTES del cambio de estado.
+     * @param string $done_date Día en que se terminó (Y-m-d). Vacío = hoy.
+     */
+    public static function on_task_done( $task, $done_date = '' ) {
+        if ( ! $task || ( $task->source ?? '' ) !== 'auto' || empty( $task->due_date ) ) return;
+
+        global $wpdb; $t = CMH_Core::tables();
+        $m = $wpdb->get_row( $wpdb->prepare(
+            "SELECT id, next_maintenance_date, maintenance_interval_days FROM {$t['machines']} WHERE id=%d",
+            (int) $task->machine_id
+        ) );
+        if ( ! $m || $m->next_maintenance_date !== $task->due_date ) return;
+
+        $interval = (int) $m->maintenance_interval_days;
+        if ( $interval < 1 ) {
+            self::clear_next_maintenance( (int) $m->id );
+            return;
+        }
+
+        $next = date( 'Y-m-d', strtotime( ( $done_date ?: current_time( 'Y-m-d' ) ) . ' +' . $interval . ' days' ) );
+        $wpdb->update( $t['machines'],
+            [ 'next_maintenance_date' => $next, 'updated_at' => current_time( 'mysql' ) ],
+            [ 'id' => (int) $m->id ]
+        );
+        self::sync_machine_task( (int) $m->id );
+    }
+
+    /**
+     * v2.9 — Reparación única al actualizar: máquinas que siguen «vencidas»
+     * aunque su tarea de mantenimiento ya se cerró antes de esta versión. Se
+     * les aplica lo mismo que on_task_done, contando desde el día del cierre.
+     *
+     * @return int Máquinas corregidas.
+     */
+    public static function repair_done_maintenance() {
+        global $wpdb; $t = CMH_Core::tables();
+        $tasks = $wpdb->get_results(
+            "SELECT ta.* FROM {$t['tasks']} ta
+             JOIN {$t['machines']} m ON m.id = ta.machine_id
+             WHERE ta.source = 'auto'
+               AND ta.status IN ('completada','sin_formato')
+               AND ta.due_date = m.next_maintenance_date"
+        );
+        foreach ( $tasks as $ta ) {
+            self::on_task_done( $ta, $ta->updated_at ? substr( $ta->updated_at, 0, 10 ) : '' );
+        }
+        return count( $tasks );
     }
 
     /** Normaliza el intervalo que llega de un formulario (0/vacío => null). */
@@ -230,7 +315,7 @@ class CMH_Schedule {
              FROM {$t['tasks']} ta
              JOIN {$t['machines']}  m ON m.id=ta.machine_id
              JOIN {$t['companies']} c ON c.id=m.company_id
-             WHERE ta.status <> 'completada'
+             WHERE ta.status NOT IN ('completada','sin_formato')
                AND ta.due_date IS NOT NULL
                AND ta.due_date <= %s
              ORDER BY ta.due_date ASC",
@@ -329,7 +414,8 @@ class CMH_Schedule {
 
         // La tarea automática viva de esta máquina, si la hay.
         $task = $wpdb->get_row( $wpdb->prepare(
-            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND source='auto' AND status<>'completada'
+            // v2.9 — Una tarea «sin formato» ya está hecha: no es la viva, no se mueve.
+            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND source='auto' AND status NOT IN ('completada','sin_formato')
              ORDER BY id DESC LIMIT 1", $machine_id
         ) );
 
@@ -481,31 +567,43 @@ class CMH_Schedule {
     }
 
     /**
-     * Un correo por técnico, solo con SUS máquinas asignadas y SUS tareas.
-     * Un técnico sin nada pendiente no recibe correo.
+     * Un correo por técnico, SOLO con lo que es suyo. Un técnico sin nada
+     * pendiente no recibe correo.
+     *
+     * v2.9 — Hasta ahora el correo traía también el mantenimiento de TODAS las
+     * máquinas a las que el técnico tenía acceso: una máquina con tres técnicos
+     * asignados le llegaba a los tres, aunque la tarea fuera de uno solo. Ahora:
+     *   - Tareas: solo las asignadas a él.
+     *   - Mantenimientos sin tarea: solo los de las máquinas donde él es el
+     *     técnico principal, que es a quien le tocaría la tarea. Si la máquina
+     *     ya tiene una tarea en la ventana, manda la tarea (y su asignado).
      */
     private static function send_tech_digests( $machines, $tasks, $days ) {
         $sent = 0;
+
+        // Máquinas que ya tienen tarea en la ventana: se avisan por la tarea.
+        $with_task = array_map( 'intval', wp_list_pluck( $tasks, 'machine_id' ) );
+
         foreach ( CMH_Tech::technicians() as $u ) {
             if ( ! is_email( $u->user_email ) ) continue;
+            $uid = (int) $u->ID;
 
-            // v2.0 — También las máquinas que solo tiene por tarea: si la tarea entra
-            // en el correo, su máquina debe entrar con ella.
-            $machine_ids = CMH_Tech::accessible_machine_ids( (int) $u->ID );
-            $my_machines = array_values( array_filter( $machines, function ( $m ) use ( $machine_ids ) {
-                return in_array( (int) $m->id, $machine_ids, true );
+            $my_tasks = array_values( array_filter( $tasks, function ( $ta ) use ( $uid ) {
+                return (int) $ta->assigned_to === $uid;
             } ) );
-            $my_tasks = array_values( array_filter( $tasks, function ( $ta ) use ( $u ) {
-                return (int) $ta->assigned_to === (int) $u->ID;
+            $my_machines = array_values( array_filter( $machines, function ( $m ) use ( $uid, $with_task ) {
+                return ! in_array( (int) $m->id, $with_task, true )
+                    && CMH_Tech::primary_user_id( (int) $m->id ) === $uid;
             } ) );
             if ( ! $my_machines && ! $my_tasks ) continue;
 
             $body  = self::mail_header(
                 'Hola ' . $u->display_name . ',',
-                'Esto es lo que tienes por atender en los próximos ' . (int) $days . ' días (incluye vencidos).'
+                'Esto es lo que tienes asignado para los próximos ' . (int) $days . ' días (incluye vencidos).'
             );
-            $body .= self::machines_table_html( $my_machines );
-            $body .= self::tasks_table_html( $my_tasks, false );
+            // Los enlaces van a «Mis Máquinas»: el técnico no entra al panel de administración.
+            $body .= self::machines_table_html( $my_machines, 'cmh-tech' );
+            $body .= self::tasks_table_html( $my_tasks, false, 'cmh-tech' );
             $body .= self::mail_footer();
 
             $subject = sprintf( '[%s] Tienes %d mantenimiento(s) y %d tarea(s) pendientes',
@@ -549,14 +647,15 @@ class CMH_Schedule {
         return '<span style="color:#7a4f00">En ' . $days . ' días</span>';
     }
 
-    private static function machines_table_html( $machines ) {
+    /** $page: página destino de los enlaces (admin por defecto, «cmh-tech» para técnicos). */
+    private static function machines_table_html( $machines, $page = '' ) {
         if ( ! $machines ) return '';
         $out = '<h3 style="font-size:15px;margin:18px 0 8px">Mantenimientos programados (' . count( $machines ) . ')</h3>'
              . '<table style="border-collapse:collapse;width:100%"><thead><tr>'
              . self::th( 'Máquina' ) . self::th( 'Equipo' ) . self::th( 'Cliente' )
              . self::th( 'Fecha' ) . self::th( 'Estado' ) . '</tr></thead><tbody>';
         foreach ( $machines as $m ) {
-            $url = CMH_Admin::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $m->id ] );
+            $url = CMH_Admin::admin_url( $page ?: CMH_SLUG . '-machines', [ 'machine_id' => $m->id ] );
             $out .= '<tr>'
                 . self::td( '<a href="' . esc_url( $url ) . '" style="color:#2271b1;text-decoration:none"><strong>' . esc_html( $m->machine_code ) . '</strong></a>' )
                 . self::td( esc_html( trim( $m->brand . ' ' . $m->model ) ) )
@@ -568,7 +667,7 @@ class CMH_Schedule {
         return $out . '</tbody></table>';
     }
 
-    private static function tasks_table_html( $tasks, $show_tech ) {
+    private static function tasks_table_html( $tasks, $show_tech, $page = '' ) {
         if ( ! $tasks ) return '';
         $out = '<h3 style="font-size:15px;margin:22px 0 8px">Tareas pendientes (' . count( $tasks ) . ')</h3>'
              . '<table style="border-collapse:collapse;width:100%"><thead><tr>'
@@ -576,7 +675,7 @@ class CMH_Schedule {
              . ( $show_tech ? self::th( 'Técnico' ) : '' )
              . self::th( 'Vence' ) . self::th( 'Estado' ) . '</tr></thead><tbody>';
         foreach ( $tasks as $ta ) {
-            $url  = CMH_Admin::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $ta->machine_id ] );
+            $url  = CMH_Admin::admin_url( $page ?: CMH_SLUG . '-machines', [ 'machine_id' => $ta->machine_id ] );
             $tech = $ta->assigned_to ? get_the_author_meta( 'display_name', $ta->assigned_to ) : '—';
             $out .= '<tr>'
                 . self::td( '<strong>' . esc_html( $ta->title ) . '</strong>' )
@@ -628,7 +727,7 @@ class CMH_Schedule {
             . '<label>Días de anticipación'
             . '<input type="number" name="alert_days_before" value="' . esc_attr( $days ) . '" min="0" max="365" step="1" required>'
             . '</label>'
-            . '<label>Correos adicionales <span class="cmh-optional">(separados por coma)</span>'
+            . '<label>Correos adicionales <span class="cmh-optional">(separados por coma · reciben el resumen completo)</span>'
             . '<input type="text" name="alert_emails" value="' . esc_attr( $s['alert_emails'] ) . '" placeholder="jefe@empresa.com, coordinador@empresa.com">'
             . '</label>'
             . '</div>'
@@ -637,7 +736,8 @@ class CMH_Schedule {
             . '<label><input type="checkbox" name="alert_to_admin" value="1" ' . checked( $s['alert_to_admin'], 1, false ) . '> '
             . 'Enviar resumen al correo del administrador <span class="cmh-optional">(' . esc_html( get_option( 'admin_email' ) ) . ')</span></label>'
             . '<label><input type="checkbox" name="alert_to_techs" value="1" ' . checked( $s['alert_to_techs'], 1, false ) . '> '
-            . 'Enviar a cada técnico un correo con sus máquinas y tareas</label>';
+            . 'Enviar a cada técnico un correo solo con las tareas asignadas a él</label>'
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 0">Los «Correos adicionales» y el del administrador reciben el resumen COMPLETO de todos: no pongas ahí el correo de un técnico.</p>';
 
         echo '<div class="cmh-form-section">'
             . '<p class="cmh-form-section-title">Tareas automáticas</p>'

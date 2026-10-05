@@ -74,6 +74,7 @@ class CMH_Forms {
             'worked_hours'   => [ 'label' => 'Horas trabajadas',       'req' => false, 'hint' => '' ],
             'downtime_hours' => [ 'label' => 'Horas de parada',        'req' => false, 'hint' => 'Es lo que descuenta disponibilidad cuando el tipo es avería.' ],
             'failure_system' => [ 'label' => 'Sistema / falla',        'req' => false, 'hint' => 'Alimenta la gráfica «Averías por sistema».' ],
+            'mtto_level'     => [ 'label' => 'Tipo de mantenimiento preventivo', 'req' => false, 'hint' => '250H, 500H… Se muestra como «MTTO PREVENTIVO 250H». Si el formato no lo trae, no se muestra nada.' ],
             'parts'          => [ 'label' => 'Repuestos',              'req' => false, 'hint' => '' ],
             'services'       => [ 'label' => 'Servicios',              'req' => false, 'hint' => '' ],
             'observations'   => [ 'label' => 'Observaciones',          'req' => false, 'hint' => '' ],
@@ -205,6 +206,7 @@ class CMH_Forms {
             'type_field'       => '',
             'type_map'         => [],
             'system_map'       => [],
+            'level_map'        => [],
             'type_rules'       => [],
             'prefill'          => [],
         ];
@@ -316,14 +318,17 @@ class CMH_Forms {
     /** Todas las configuraciones guardadas (incluidas las desactivadas). */
     public static function all() {
         $saved = get_option( self::OPTION, null );
-        if ( ! is_array( $saved ) || ! $saved ) return self::legacy_seed();
+        // v2.9 — La siembra es solo para cuando la opción NO EXISTE. Si existe y
+        // está vacía es porque se borraron todos los formatos a propósito: antes
+        // eso resucitaba el mapeo de la v1 y su prellenado sin que nadie lo pidiera.
+        if ( ! is_array( $saved ) ) return self::legacy_seed();
 
         $out = [];
         foreach ( $saved as $id => $cfg ) {
             $id = (int) $id;
             if ( $id > 0 && is_array( $cfg ) ) $out[ $id ] = self::normalize( $cfg );
         }
-        return $out ?: self::legacy_seed();
+        return $out;
     }
 
     /** Solo los formatos activos: es lo que la integración debe capturar. */
@@ -347,6 +352,7 @@ class CMH_Forms {
         $c['fields']           = is_array( $c['fields'] )     ? $c['fields']     : [];
         $c['type_map']         = is_array( $c['type_map'] )   ? $c['type_map']   : [];
         $c['system_map']       = is_array( $c['system_map'] ) ? $c['system_map'] : [];
+        $c['level_map']        = is_array( $c['level_map'] )  ? $c['level_map']  : [];
         $c['prefill']          = is_array( $c['prefill'] )    ? $c['prefill']    : [];
         $c['type_rules']       = is_array( $c['type_rules'] ) ? self::clean_rules( $c['type_rules'] ) : [];
         $c['maintenance_type'] = isset( self::maintenance_types()[ $c['maintenance_type'] ] )
@@ -416,7 +422,7 @@ class CMH_Forms {
      */
     public static function maybe_seed() {
         $saved = get_option( self::OPTION, null );
-        if ( ! is_array( $saved ) || ! $saved ) {
+        if ( ! is_array( $saved ) ) {
             $seed = self::legacy_seed();
 
             // Una build intermedia guardó las páginas aparte; se absorben aquí.
@@ -973,8 +979,16 @@ class CMH_Forms {
         // ── Sistema / falla ───────────────────────────────────────────────────
         echo '<div class="cmh-panel"><h2>Traducción del sistema / falla</h2>'
             . '<p style="font-size:12px;color:#646970;margin:-8px 0 12px">Traduce lo que dice el formulario a la taxonomía del plugin, que es la que alimenta «Averías por sistema». '
-            . 'Si un valor no está en la tabla se intenta reconocer solo; si no se logra, queda como «Sin especificar» y se anota en los logs.</p>';
+            . 'Si un valor no está en la tabla se intenta reconocer solo y, si no existe, se agrega a la lista. Si el formato no trae sistema, simplemente no se muestra.</p>';
         self::map_rows( 'system_map', $cfg['system_map'], CMH_Admin::failure_systems(), 'Valor en el formulario', 'Sistema del plugin' );
+        echo '</div>';
+
+        // ── v2.9 — Tipo de mantenimiento preventivo ──────────────────────────
+        echo '<div class="cmh-panel"><h2>Traducción del tipo de mantenimiento preventivo</h2>'
+            . '<p style="font-size:12px;color:#646970;margin:-8px 0 12px">Funciona igual que los sistemas: elige arriba, en «Captura», qué campo trae el tipo (250H, 500H…). '
+            . 'Si el valor del formulario se escribe distinto al de la lista, tradúcelo aquí; si no, se reconoce solo y, si no existe, se agrega a la lista. '
+            . 'Un formato que no lo traiga simplemente no lo muestra. Si lo trae, la intervención queda como <strong>Preventivo</strong>, salvo que las reglas la hayan marcado como avería.</p>';
+        self::map_rows( 'level_map', $cfg['level_map'], CMH_Taxonomy::mlevel_labels(), 'Valor en el formulario', 'Tipo de mantenimiento' );
         echo '</div>';
 
         // ── Autorrelleno ──────────────────────────────────────────────────────
@@ -1160,12 +1174,15 @@ class CMH_Forms {
             'worked_hours'     => 'Horas trabajadas',
             'downtime_hours'   => 'Horas de parada',
             'failure_system'   => 'Sistema',
+            'mtto_level'       => 'Tipo de mtto. preventivo',
             'technician'       => 'Técnico',
             'cost'             => 'Costo',
         ] as $k => $label ) {
             $v = $parsed[ $k ] ?? '';
             if ( $k === 'machine_found' ) $v = $parsed['machine_found'] ? 'Sí' : 'NO — no se registraría';
             if ( $k === 'affects' )       $v = $parsed['affects'] ? 'Sí' : 'No';
+            if ( $k === 'mtto_level' )    $v = CMH_Taxonomy::mlevel_label( $v );
+            if ( $k === 'failure_system' ) $v = CMH_Taxonomy::systems_label( $v );
             $color = ( $k === 'machine_found' && ! $parsed['machine_found'] ) ? 'color:#d63638;font-weight:600' : '';
             echo '<tr><td style="width:48%;font-size:12px;color:#646970">' . esc_html( $label ) . '</td>'
                 . '<td style="' . $color . '">' . esc_html( $v === '' ? '—' : (string) $v ) . '</td></tr>';
@@ -1215,6 +1232,7 @@ class CMH_Forms {
         }
 
         $cfg['system_map'] = self::collect_map( $_POST['system_map'] ?? [], array_keys( CMH_Admin::failure_systems() ) );
+        $cfg['level_map']  = self::collect_map( $_POST['level_map'] ?? [], array_keys( CMH_Taxonomy::mlevel_labels() ) );
         $cfg['type_rules'] = self::collect_rules( $_POST['rules'] ?? [] );
         $cfg['prefill']    = self::collect_prefill( $_POST['prefill'] ?? [] );
 
