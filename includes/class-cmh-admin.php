@@ -25,6 +25,7 @@ class CMH_Admin {
         add_action( 'admin_post_cm_edit_intervention', [ __CLASS__, 'edit_intervention' ] );
         add_action( 'admin_post_cm_schedule_maintenance', [ __CLASS__, 'schedule_maintenance' ] );
         add_action( 'admin_post_cm_find_pdf',          [ __CLASS__, 'find_pdf_now' ] );
+        add_action( 'admin_post_cmh_file',             [ __CLASS__, 'serve_file' ] );
         add_action( 'admin_post_cm_update_company',    [ __CLASS__, 'update_company' ] );
         add_action( 'admin_post_cm_update_city',       [ __CLASS__, 'update_city' ] );
         add_action( 'admin_post_cm_delete_intervention', [ __CLASS__, 'delete_intervention' ] );
@@ -1255,20 +1256,20 @@ class CMH_Admin {
             echo '<tr>'
                 . '<td>' . esc_html( $r->intervention_date ) . '</td>'
                 . '<td>' . esc_html( $r->machine_code ) . '</td>'
-                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type ) . '</td>'
+                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' ) . '</td>'
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td>' . esc_html( $r->downtime_hours ) . ' h</td>'
                 . '<td>$' . number_format( (float) $r->cost, 0, ',', '.' ) . '</td>'
                 . '<td>' . ( $pay ?: '—' ) . '</td>'
-                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>' : '—' ) . '</td>'
+                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver PDF</a>' : '—' ) . '</td>'
                 . '</tr>';
         }
         echo '</tbody></table>';
     }
 
     /** v2.3 — Delegado en la taxonomía configurable. */
-    public static function mtype_badge( $type ) {
-        return CMH_Taxonomy::mtype_badge( $type );
+    public static function mtype_badge( $type, $level = '' ) {
+        return CMH_Taxonomy::mtype_badge( $type, $level );
     }
 
     /** Estados de pago disponibles, ya configurables desde Ajustes. */
@@ -1401,7 +1402,8 @@ class CMH_Admin {
         return self::admin_url( CMH_SLUG . '-interventions', array_filter( $args ) );
     }
 
-    private static function interv_where( $f ) {
+    /** v2.9 — Pública: el portal del cliente arma su lista con el mismo filtro. */
+    public static function interv_where( $f ) {
         global $wpdb;
         $w = [];
         if ( $f['type'] )       $w[] = $wpdb->prepare( 'i.maintenance_type=%s', $f['type'] );
@@ -1500,14 +1502,14 @@ class CMH_Admin {
                 . '<td class="cmh-nowrap"><a href="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $r->machine_id ] ) ) . '">'
                 . esc_html( $r->machine_code ?: '—' ) . '</a>'
                 . ( $r->company_name ? '<br><span class="cmh-muted">' . esc_html( $r->company_name ) . '</span>' : '' ) . '</td>'
-                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type )
+                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' )
                 . ( $r->affects_availability ? ' <span class="cmh-badge cmh-badge-averia cmh-badge-xs">Disp.</span>' : '' ) . '</td>'
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td class="cmh-num">' . esc_html( 0 + $r->downtime_hours ) . ' h</td>'
                 . '<td class="cmh-num">' . ( $cost > 0 ? '$' . number_format( $cost, 0, ',', '.' ) : '—' ) . '</td>'
                 . '<td>' . ( self::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) ?: '—' ) . '</td>'
                 . '<td>' . ( $r->file_url
-                    ? '<a class="button button-small" target="_blank" rel="noopener" href="' . esc_url( $r->file_url ) . '">Ver</a>'
+                    ? '<a class="button button-small" target="_blank" rel="noopener" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>'
                     : '<span class="cmh-muted">—</span>' ) . '</td>'
                 . '<td class="cmh-nowrap">'
                 . ( $editando === (int) $r->id
@@ -1623,6 +1625,7 @@ class CMH_Admin {
             echo '<option value="' . esc_attr( $k ) . '" ' . selected( $r->payment_status, $k, false ) . '>' . esc_html( $v ) . '</option>';
         echo '</select></label>'
             . '<label>Monto abonado<input type="number" step="100" name="paid_amount" value="' . esc_attr( $r->paid_amount ) . '" min="0"></label>'
+            . self::mlevel_field( (string) ( $r->mtto_level ?? '' ) )
             . '</div>';
 
         // v2.7 — Los sistemas también se editan: hasta ahora había que corregirlos
@@ -1677,7 +1680,7 @@ class CMH_Admin {
             $cost = (float) $r->cost;
             echo '<tr>'
                 . '<td class="cmh-nowrap">' . esc_html( $r->intervention_date ) . '</td>'
-                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type )
+                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' )
                 . ( $r->affects_availability ? ' <span class="cmh-badge cmh-badge-averia cmh-badge-xs">Disp.</span>' : '' ) . '</td>'
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td class="cmh-num">' . esc_html( 0 + $r->hourmeter ) . '</td>'
@@ -1685,7 +1688,7 @@ class CMH_Admin {
                 . '<td class="cmh-num">' . ( $cost > 0 ? '$' . number_format( $cost, 0, ',', '.' ) : '—' ) . '</td>'
                 . '<td>' . ( self::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) ?: '—' ) . '</td>'
                 . '<td>' . ( $r->file_url
-                    ? '<a class="button button-small" target="_blank" rel="noopener" href="' . esc_url( $r->file_url ) . '">Ver</a>'
+                    ? '<a class="button button-small" target="_blank" rel="noopener" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>'
                     : '<span class="cmh-muted">—</span>' ) . '</td>'
                 . '</tr>';
 
@@ -1739,7 +1742,7 @@ class CMH_Admin {
                 . '<div class="cmh-dot" style="' . $dstyle . '"></div>'
                 . '<div class="cmh-timeline-card" style="' . $cstyle . '">'
                 . '<div class="cmh-timeline-head">'
-                . '<strong>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type )
+                . '<strong>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' )
                 . ( $r->affects_availability ? ' <span class="cmh-badge cmh-badge-averia">Descuenta disponibilidad</span>' : '' )
                 . ( self::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) ? ' ' . self::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) : '' )
                 . '</strong>'
@@ -1766,7 +1769,7 @@ class CMH_Admin {
 
             echo '<div class="cmh-card-actions">';
             if ( $r->file_url ) {
-                echo '<a class="button button-small" target="_blank" href="' . esc_url( $r->file_url ) . '">Ver PDF</a>';
+                echo '<a class="button button-small" target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver PDF</a>';
             } else {
                 echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline">'
                     . '<input type="hidden" name="action" value="cm_find_pdf">'
@@ -1837,6 +1840,27 @@ class CMH_Admin {
     }
 
     /**
+     * v2.9 — Selector del tipo de mantenimiento preventivo («MTTO PREVENTIVO 250H»).
+     * Si la intervención tiene uno que ya se retiró de la lista, se conserva
+     * como opción: editar otra cosa no debe borrarlo sin querer.
+     */
+    public static function mlevel_field( $current = '' ) {
+        $opts = CMH_Taxonomy::mlevel_labels();
+        if ( $current !== '' && ! isset( $opts[ $current ] ) ) $opts[ $current ] = CMH_Taxonomy::mlevel_label( $current );
+        $html = '<label>Tipo de mtto. preventivo <span class="cmh-optional">(opcional)</span><select name="mtto_level">'
+              . '<option value="">— Ninguno —</option>';
+        foreach ( $opts as $k => $v )
+            $html .= '<option value="' . esc_attr( $k ) . '" ' . selected( $current, $k, false ) . '>' . esc_html( $v ) . '</option>';
+        return $html . '</select></label>';
+    }
+
+    /** v2.9 — Lo que llega del selector, o null si no se eligió nada. */
+    public static function mlevel_from_post() {
+        $v = CMH_Taxonomy::clean_slug( wp_unslash( $_POST['mtto_level'] ?? '' ) );
+        return $v !== '' ? $v : null;
+    }
+
+    /**
      * Formulario de intervención.
      *
      * v2.4 — Se abre en ventana, no en la columna estrecha de la derecha, así que
@@ -1860,6 +1884,7 @@ class CMH_Admin {
             echo '<option value="' . esc_attr( $mk ) . '" data-affects="' . ( CMH_Taxonomy::mtype_affects( $mk ) ? '1' : '0' ) . '">' . esc_html( $ml ) . '</option>';
         echo '</select></label>'
             . '<label>Técnico<input name="technician"></label>'
+            . self::mlevel_field()
             . '<label>Horómetro<input type="number" step="0.01" name="hourmeter" min="0" id="cmh-hourmeter-input" data-last-hourmeter="' . esc_attr( $last_hourmeter ) . '"></label>'
             . '</div>'
             . '<div id="cmh-hourmeter-warn" class="cmh-field-warning" style="display:none"></div>'
@@ -1938,7 +1963,7 @@ class CMH_Admin {
         }
         echo '<table class="widefat cmh"><thead><tr><th>Archivo</th><th>Intervención</th><th>Fecha</th></tr></thead><tbody>';
         foreach ( $rows as $r )
-            echo '<tr><td><a target="_blank" href="' . esc_url( $r->file_url ) . '">' . esc_html( $r->file_name ) . '</a></td>'
+            echo '<tr><td><a target="_blank" href="' . esc_url( self::file_link( 0, $r->id ) ) . '">' . esc_html( $r->file_name ) . '</a></td>'
                 . '<td>' . ( $r->intervention_id ? '#' . esc_html( $r->intervention_id ) : '—' ) . '</td>'
                 . '<td>' . esc_html( $r->created_at ) . '</td></tr>';
         echo '</tbody></table>';
@@ -2118,6 +2143,7 @@ class CMH_Admin {
             'paid_amount'          => $pay_paid,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
             'failure_system'       => CMH_Taxonomy::systems_to_string( (array) ( $_POST['failure_system'] ?? [] ) ),
+            'mtto_level'           => self::mlevel_from_post(),
             'parts'                => sanitize_textarea_field( $_POST['parts'] ),
             'services'             => sanitize_textarea_field( $_POST['services'] ),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),
@@ -2296,15 +2322,16 @@ class CMH_Admin {
         $machine_id = intval( $_GET['machine_id'] ?? 0 );
         $where  = $machine_id ? $wpdb->prepare( 'WHERE i.machine_id=%d', $machine_id ) : '';
         $rows   = $wpdb->get_results(
-            "SELECT i.intervention_date, m.machine_code, i.maintenance_type, i.form_type, i.technician, i.hourmeter, i.worked_hours, i.downtime_hours, i.affects_availability, i.failure_system, i.cost, i.payment_status, i.paid_amount, (i.cost - i.paid_amount) saldo, i.parts, i.services, i.observations FROM {$t['interventions']} i LEFT JOIN {$t['machines']} m ON m.id=i.machine_id $where ORDER BY i.intervention_date DESC, i.id DESC",
+            "SELECT i.intervention_date, m.machine_code, i.maintenance_type, i.form_type, i.technician, i.hourmeter, i.worked_hours, i.downtime_hours, i.affects_availability, i.failure_system, i.mtto_level, i.cost, i.payment_status, i.paid_amount, (i.cost - i.paid_amount) saldo, i.parts, i.services, i.observations FROM {$t['interventions']} i LEFT JOIN {$t['machines']} m ON m.id=i.machine_id $where ORDER BY i.intervention_date DESC, i.id DESC",
             ARRAY_A
         );
         self::csv_headers( 'intervenciones-' . date( 'Y-m-d' ) . '.csv' );
-        self::csv_row( [ 'Fecha', 'Máquina', 'Tipo', 'Formato', 'Técnico', 'Horómetro', 'H.Trabajadas', 'H.Parada', 'Afecta Disp.', 'Sistema/Falla', 'Costo', 'Estado pago', 'Abonado', 'Saldo', 'Repuestos', 'Servicios', 'Observaciones' ] );
+        self::csv_row( [ 'Fecha', 'Máquina', 'Tipo', 'Formato', 'Técnico', 'Horómetro', 'H.Trabajadas', 'H.Parada', 'Afecta Disp.', 'Sistema/Falla', 'Tipo de mtto. preventivo', 'Costo', 'Estado pago', 'Abonado', 'Saldo', 'Repuestos', 'Servicios', 'Observaciones' ] );
         foreach ( $rows as $r ) {
             // Los sistemas salen con su nombre y no con la clave interna, que es
             // lo que se abre en Excel.
             $r['failure_system'] = CMH_Taxonomy::systems_label( $r['failure_system'] );
+            $r['mtto_level']     = CMH_Taxonomy::mlevel_label( $r['mtto_level'] );
             self::csv_row( array_values( $r ) );
         }
         exit;
@@ -2362,6 +2389,7 @@ class CMH_Admin {
             'paid_amount'          => $pay_paid,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, $manual_av ),
             'failure_system'       => CMH_Taxonomy::systems_to_string( (array) ( $_POST['failure_system'] ?? [] ) ),
+            'mtto_level'           => self::mlevel_from_post(),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),
         ];
 
@@ -2398,6 +2426,7 @@ class CMH_Admin {
             'paid_amount'          => 'Abonado',
             'affects_availability' => 'Afecta disponibilidad',
             'failure_system'       => 'Sistema / falla',
+            'mtto_level'           => 'Tipo de mtto. preventivo',
             'observations'         => 'Observaciones',
         ];
         $numericos = [ 'downtime_hours', 'cost', 'paid_amount', 'affects_availability' ];
@@ -2427,6 +2456,7 @@ class CMH_Admin {
             case 'maintenance_type':     return CMH_Taxonomy::mtype_label( $valor );
             case 'payment_status':       return CMH_Taxonomy::pstate_label( $valor );
             case 'failure_system':       return CMH_Taxonomy::systems_label( $valor ) ?: '(vacío)';
+            case 'mtto_level':           return CMH_Taxonomy::mlevel_label( $valor );
             case 'affects_availability': return ( (int) $valor === 1 ) ? 'Sí' : 'No';
             case 'cost':
             case 'paid_amount':          return '$' . number_format( (float) $valor, 0, ',', '.' );
@@ -2492,6 +2522,104 @@ class CMH_Admin {
     }
 
     // =========================================================================
+    // v2.9 — Ver un archivo pasando por el plugin
+    // =========================================================================
+
+    /**
+     * Enlace para ver el archivo de una intervención (el más reciente) o un
+     * archivo concreto. Todos los botones «Ver» / «Ver PDF» usan esto.
+     */
+    public static function file_link( $intervention_id = 0, $file_id = 0 ) {
+        return admin_url( 'admin-post.php?' . http_build_query( array_filter( [
+            'action'          => 'cmh_file',
+            'intervention_id' => (int) $intervention_id,
+            'file_id'         => (int) $file_id,
+        ] ) ) );
+    }
+
+    /**
+     * Entrega el archivo leyéndolo del disco, en vez de mandar al navegador a
+     * su URL pública.
+     *
+     * Por qué: varias intervenciones quedaron apuntando a uploads/e2pdf, carpeta
+     * que E2PDF protege con .htaccess, así que su enlace daba «403 Forbidden»
+     * aunque el archivo existiera. Leerlo desde PHP no depende de esa regla ni
+     * de dónde haya caído el archivo, y de paso comprueba que quien lo pide
+     * tenga acceso a la máquina (técnico asignado, cliente de esa empresa o
+     * administrador).
+     */
+    public static function serve_file() {
+        if ( ! is_user_logged_in() ) wp_die( 'Sin permisos.' );
+        global $wpdb; $t = CMH_Core::tables();
+
+        $file_id = intval( $_GET['file_id'] ?? 0 );
+        $iv_id   = intval( $_GET['intervention_id'] ?? 0 );
+        $f = $file_id
+            ? $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['files']} WHERE id=%d", $file_id ) )
+            : $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['files']} WHERE intervention_id=%d ORDER BY id DESC LIMIT 1", $iv_id ) );
+        if ( ! $f ) wp_die( 'Archivo no encontrado.', 'Archivo', [ 'response' => 404, 'back_link' => true ] );
+
+        if ( ! self::can_see_machine( (int) $f->machine_id ) ) wp_die( 'No tienes acceso a este archivo.', 'Archivo', [ 'response' => 403, 'back_link' => true ] );
+
+        $path = self::file_disk_path( $f );
+
+        // El PDF quedó en la carpeta de E2PDF y ya no está: se intenta rescatarlo.
+        if ( ! $path && $f->intervention_id ) {
+            $code = $wpdb->get_var( $wpdb->prepare( "SELECT machine_code FROM {$t['machines']} WHERE id=%d", (int) $f->machine_id ) );
+            if ( $code ) {
+                CMH_Integration::find_pdf( (int) $f->intervention_id, (int) $f->machine_id, $code );
+                $f    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['files']} WHERE id=%d", (int) $f->id ) );
+                $path = $f ? self::file_disk_path( $f ) : '';
+            }
+        }
+
+        if ( ! $path ) {
+            wp_die( 'El archivo ya no está en el servidor. Un administrador puede volver a buscarlo («Buscar PDF») o anexarlo a mano desde la máquina.',
+                'Archivo', [ 'response' => 404, 'back_link' => true ] );
+        }
+
+        $type = $f->file_type ?: ( wp_check_filetype( $path )['type'] ?: 'application/octet-stream' );
+        $name = $f->file_name ?: basename( $path );
+
+        while ( ob_get_level() ) ob_end_clean();
+        nocache_headers();
+        header( 'Content-Type: ' . $type );
+        header( 'Content-Length: ' . filesize( $path ) );
+        header( 'Content-Disposition: inline; filename="' . str_replace( [ '"', "\r", "\n" ], '', $name ) . '"; filename*=UTF-8\'\'' . rawurlencode( $name ) );
+        header( 'X-Content-Type-Options: nosniff' );
+        readfile( $path );
+        exit;
+    }
+
+    /**
+     * Ruta real del archivo en disco, o '' si no existe. Se exige que esté
+     * dentro de uploads: un file_path manipulado no puede servir otra cosa.
+     */
+    private static function file_disk_path( $f ) {
+        $up   = wp_upload_dir();
+        $base = realpath( $up['basedir'] );
+        if ( ! $base ) return '';
+
+        $cands = [];
+        if ( ! empty( $f->file_path ) ) $cands[] = $f->file_path;
+        // Respaldo: deducir la ruta desde la URL si apunta a uploads.
+        $url  = set_url_scheme( (string) $f->file_url, 'https' );
+        $burl = set_url_scheme( $up['baseurl'], 'https' );
+        if ( $url && strpos( $url, $burl ) === 0 ) {
+            $cands[] = $up['basedir'] . rawurldecode( substr( strtok( $url, '?' ), strlen( $burl ) ) );
+        }
+
+        foreach ( $cands as $c ) {
+            $real = realpath( $c );
+            if ( $real && is_file( $real ) && is_readable( $real )
+                 && strpos( $real, $base . DIRECTORY_SEPARATOR ) === 0 ) {
+                return $real;
+            }
+        }
+        return '';
+    }
+
+    // =========================================================================
     // AJAX
     // =========================================================================
 
@@ -2522,7 +2650,29 @@ class CMH_Admin {
         ) );
         if ( ! $m ) wp_send_json_error( [ 'message' => 'Máquina no encontrada.' ] );
 
-        wp_send_json_success( self::can_see_machine( (int) $m->id ) ? $m : self::machine_prefill_payload( $m ) );
+        $out = self::can_see_machine( (int) $m->id ) ? $m : self::machine_prefill_payload( $m );
+        // v2.9 — El relleno es el configurado en «Formatos», resuelto aquí igual
+        // que cuando el formato se abre desde un enlace.
+        $out->prefill = CMH_Forms::resolve_prefill( $m->machine_code );
+        wp_send_json_success( $out );
+    }
+
+    /**
+     * v2.9 — Resumen público de una máquina por su código, para el aviso verde
+     * del formato. null si no existe.
+     */
+    public static function machine_summary( $code ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $m = $wpdb->get_row( $wpdb->prepare(
+            "SELECT m.machine_code, m.brand, m.model, m.serial, m.contact,
+                    c.name company_name, ci.name city_name
+             FROM {$t['machines']} m
+             JOIN {$t['companies']} c  ON c.id=m.company_id
+             JOIN {$t['cities']}    ci ON ci.id=m.city_id
+             WHERE m.machine_code=%s",
+            strtoupper( trim( (string) $code ) )
+        ) );
+        return $m ? self::machine_prefill_payload( $m ) : null;
     }
 
     /**
@@ -2590,6 +2740,7 @@ class CMH_Admin {
             $code, $code
         ) );
         if ( ! $m ) wp_send_json_error( [ 'message' => 'Máquina no encontrada.' ] );
+        $m->prefill = CMH_Forms::resolve_prefill( $m->machine_code );
         wp_send_json_success( $m );
     }
 

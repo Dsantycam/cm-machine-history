@@ -38,9 +38,10 @@ class CMH_Client {
     }
 
     public static function admin_menu() {
-        // «Mis Equipos» es el portal de solo lectura para clientes. Los administradores/
-        // editores gestionan todo desde el menú «Máquinas» y no deben ver este menú.
-        if ( current_user_can( 'edit_others_posts' ) ) return;
+        // «Mis Equipos» es el portal de solo lectura para clientes. Un administrador
+        // puro gestiona todo desde «Máquinas»; v2.9: si además tiene el rol de
+        // cliente, ve también este menú, acotado a lo que se le asignó.
+        if ( ! CMH_Core::is_client_user() ) return;
 
         add_menu_page(
             'Portal Cliente', 'Mis Equipos', 'cmh_client', 'cmh-client',
@@ -116,6 +117,16 @@ class CMH_Client {
         ];
     }
 
+    /**
+     * v2.9 — ¿Este usuario ve el portal sin restricción? Solo el administrador
+     * que NO es cliente, que está previsualizando. Si además tiene el rol de
+     * cliente, el portal le muestra lo suyo, como a cualquier otro cliente.
+     */
+    public static function unrestricted( $user_id = null ) {
+        $user_id = $user_id ?: get_current_user_id();
+        return user_can( $user_id, 'edit_others_posts' ) && ! CMH_Core::is_client_user( $user_id );
+    }
+
     /** ¿El usuario tiene algún acceso asignado? */
     public static function has_scope( $user_id = null ) {
         $acl = self::acl( $user_id );
@@ -129,7 +140,7 @@ class CMH_Client {
      */
     public static function scope_where( $user_id = null, $alias = 'm' ) {
         $user_id = $user_id ?: get_current_user_id();
-        if ( user_can( $user_id, 'edit_others_posts' ) ) return '';
+        if ( self::unrestricted( $user_id ) ) return '';
 
         $acl = self::acl( $user_id );
         $or  = [];
@@ -144,7 +155,7 @@ class CMH_Client {
      */
     public static function can_access_machine( $machine_id, $user_id = null ) {
         $user_id = $user_id ?: get_current_user_id();
-        if ( user_can( $user_id, 'edit_others_posts' ) ) return true;
+        if ( self::unrestricted( $user_id ) ) return true;
 
         global $wpdb; $t = CMH_Core::tables();
         $row = $wpdb->get_row( $wpdb->prepare(
@@ -160,7 +171,7 @@ class CMH_Client {
     /** ¿El usuario puede ver esta ciudad/sucursal? */
     public static function can_access_city( $city_id, $user_id = null ) {
         $user_id = $user_id ?: get_current_user_id();
-        if ( user_can( $user_id, 'edit_others_posts' ) ) return true;
+        if ( self::unrestricted( $user_id ) ) return true;
 
         $acl = self::acl( $user_id );
         if ( in_array( (int) $city_id, $acl['cities'], true ) ) return true;
@@ -179,7 +190,7 @@ class CMH_Client {
      */
     public static function apply_report_context() {
         $uid = get_current_user_id();
-        $acl = current_user_can( 'edit_others_posts' ) ? null : self::acl( $uid );
+        $acl = self::unrestricted( $uid ) ? null : self::acl( $uid );
         CMH_Reports::set_context( 'client', $acl, 'cmh-client-reports' );
     }
 
@@ -344,9 +355,190 @@ class CMH_Client {
 
     public static function page_panel() {
         if ( ! current_user_can( 'cmh_client' ) ) wp_die( 'Sin permisos.' );
+        // v2.9 — Destino de los cuadros: la lista de intervenciones filtrada.
+        if ( ( $_GET['view'] ?? '' ) === 'interventions' ) return self::page_interventions();
         $machine_id = intval( $_GET['machine_id'] ?? 0 );
         if ( $machine_id ) return self::page_machine_client( $machine_id );
         self::page_my_equipment();
+    }
+
+    // =========================================================================
+    // v2.9 — Intervenciones del cliente: a dónde llevan los cuadros
+    // =========================================================================
+
+    /**
+     * URL de la lista con un filtro puesto.
+     *
+     * Hasta la v2.8 los cuadros del portal («Pendiente por pagar», «Pagado»…)
+     * eran tarjetas mudas: en el panel del administrador sí llevaban a la lista
+     * filtrada, y el cliente esperaba lo mismo.
+     */
+    public static function interv_url( $args = [] ) {
+        return CMH_Admin::admin_url( 'cmh-client', array_merge( [ 'view' => 'interventions' ], array_filter( $args ) ) );
+    }
+
+    /** Filtros de la lista, saneados. El alcance del cliente se aplica aparte, siempre. */
+    private static function interv_filters() {
+        $month = function ( $v ) {
+            $v = sanitize_text_field( (string) $v );
+            return preg_match( '/^\d{4}-(0[1-9]|1[0-2])$/', $v ) ? $v : '';
+        };
+        $type = sanitize_key( $_GET['type'] ?? '' );
+        if ( $type !== '' && ! isset( CMH_Taxonomy::mtypes()[ $type ] ) ) $type = '';
+        $pay = sanitize_key( $_GET['pay'] ?? '' );
+        if ( ! in_array( $pay, [ '', 'pending', 'paid', 'quote' ], true ) ) $pay = '';
+
+        $f = [
+            'type'       => $type,
+            'pay'        => $pay,
+            'state'      => '',
+            'affects'    => ( ( $_GET['affects'] ?? '' ) === '1' ) ? 1 : 0,
+            'company_id' => intval( $_GET['company_id'] ?? 0 ),
+            'city_id'    => intval( $_GET['city_id'] ?? 0 ),
+            'machine_id' => intval( $_GET['machine_id'] ?? 0 ),
+            'q'          => '',
+            'from'       => $month( $_GET['from'] ?? '' ),
+            'to'         => $month( $_GET['to'] ?? '' ),
+        ];
+        if ( $f['from'] && $f['to'] && $f['from'] > $f['to'] ) { $x = $f['from']; $f['from'] = $f['to']; $f['to'] = $x; }
+        return $f;
+    }
+
+    private static function page_interventions() {
+        global $wpdb; $t = CMH_Core::tables();
+        $uid = get_current_user_id();
+        $f   = self::interv_filters();
+
+        // Filtro del usuario + alcance del cliente, que va SIEMPRE con AND: un
+        // parámetro manipulado en la URL no puede sacar datos de otra empresa.
+        $where = CMH_Admin::interv_where( $f ) ?: 'WHERE 1=1';
+        $where .= self::scope_where( $uid );
+        if ( $f['city_id'] ) $where .= $wpdb->prepare( ' AND m.city_id=%d', $f['city_id'] );
+        if ( $f['from'] )    $where .= $wpdb->prepare( ' AND i.intervention_date >= %s', $f['from'] . '-01' );
+        if ( $f['to'] )      $where .= $wpdb->prepare( ' AND i.intervention_date <= %s', date( 'Y-m-t', strtotime( $f['to'] . '-01' ) ) );
+
+        $rows = $wpdb->get_results(
+            "SELECT i.*, m.machine_code, ci.name AS city_name, MAX(fi.file_url) AS file_url
+             FROM {$t['interventions']} i
+             JOIN {$t['machines']}  m  ON m.id  = i.machine_id
+             LEFT JOIN {$t['cities']} ci ON ci.id = m.city_id
+             LEFT JOIN {$t['files']}  fi ON fi.intervention_id = i.id
+             $where GROUP BY i.id
+             ORDER BY i.intervention_date DESC, i.id DESC LIMIT 500"
+        );
+        $totals = $wpdb->get_row(
+            "SELECT COUNT(*) n, " . CMH_Taxonomy::money_sum_sql( 'cost', 'i.' ) . " costo, "
+            . CMH_Taxonomy::money_sum_sql( 'paid_amount', 'i.' ) . " pagado, "
+            . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " saldo
+             FROM {$t['interventions']} i
+             JOIN {$t['machines']} m ON m.id = i.machine_id
+             $where"
+        );
+
+        $back = $f['machine_id']
+            ? CMH_Admin::admin_url( 'cmh-client', [ 'machine_id' => $f['machine_id'] ] )
+            : CMH_Admin::admin_url( 'cmh-client' );
+
+        CMH_Admin::page_header( 'Intervenciones', [
+            [ 'label' => 'Mis Equipos', 'url' => CMH_Admin::admin_url( 'cmh-client' ) ],
+            [ 'label' => 'Intervenciones' ],
+        ] );
+
+        echo '<div class="cmh-hero-block"><div>'
+            . '<div class="cmh-kicker">Portal del cliente</div>'
+            . '<h2>' . esc_html( self::interv_title( $f ) ) . '</h2>'
+            . '<p>' . esc_html( self::interv_subtitle( $f ) ) . '</p>'
+            . '</div><div class="cmh-hero-actions">'
+            . '<a class="button" href="' . esc_url( $back ) . '">Volver</a>'
+            . '</div></div>';
+
+        echo '<div class="cmh-grid">';
+        CMH_Admin::metric_card( 'Intervenciones', intval( $totals->n ?? 0 ), 'con este filtro', 'blue' );
+        CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $totals->costo ?? 0 ), 'con este filtro', 'blue' );
+        CMH_Admin::metric_card( 'Pagado', CMH_Reports::money( $totals->pagado ?? 0 ), 'con este filtro', 'ok' );
+        CMH_Admin::metric_card( 'Pendiente por pagar', CMH_Reports::money( $totals->saldo ?? 0 ),
+            'saldo a tu cargo', (float) ( $totals->saldo ?? 0 ) > 0 ? 'warn' : 'ok' );
+        echo '</div>';
+
+        self::interv_filter_bar( $f );
+
+        echo '<div class="cmh-panel">';
+        if ( ! $rows ) {
+            echo '<p style="margin:0;color:#646970">No hay intervenciones con este filtro.</p></div>';
+            CMH_Admin::page_footer();
+            return;
+        }
+        echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr>'
+            . '<th>Fecha</th><th>Equipo</th><th>Tipo</th><th>Técnico</th><th>H. parada</th><th>Facturado</th><th>Pago</th><th>PDF</th>'
+            . '</tr></thead><tbody>';
+        foreach ( $rows as $r ) {
+            echo '<tr>'
+                . '<td class="cmh-nowrap">' . esc_html( $r->intervention_date ) . '</td>'
+                . '<td class="cmh-nowrap"><a href="' . esc_url( CMH_Admin::admin_url( 'cmh-client', [ 'machine_id' => (int) $r->machine_id ] ) ) . '">'
+                . esc_html( $r->machine_code ) . '</a>'
+                . ( $r->city_name ? '<br><span class="cmh-muted">' . esc_html( $r->city_name ) . '</span>' : '' ) . '</td>'
+                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' ) . '</td>'
+                . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
+                . '<td>' . esc_html( 0 + $r->downtime_hours ) . ' h</td>'
+                . '<td>' . esc_html( CMH_Reports::money( $r->cost ) ) . '</td>'
+                . '<td>' . ( CMH_Admin::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) ?: '—' ) . '</td>'
+                . '<td>' . ( $r->file_url ? '<a target="_blank" rel="noopener" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>'
+                . '</tr>';
+        }
+        echo '</tbody></table></div>';
+        if ( count( $rows ) >= 500 ) echo '<p class="cmh-hint">Se muestran las 500 más recientes de este filtro.</p>';
+        echo '</div>';
+
+        CMH_Admin::page_footer();
+    }
+
+    /** Título de la lista según el filtro que trae. */
+    private static function interv_title( $f ) {
+        if ( $f['pay'] === 'pending' ) return 'Pendiente por pagar';
+        if ( $f['pay'] === 'paid' )    return 'Intervenciones pagadas';
+        if ( $f['pay'] === 'quote' )   return 'En trámite';
+        if ( $f['affects'] )           return 'Averías';
+        if ( $f['type'] )              return CMH_Taxonomy::mtype_labels()[ $f['type'] ] ?? 'Intervenciones';
+        return 'Intervenciones';
+    }
+
+    private static function interv_subtitle( $f ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $bits = [];
+        if ( $f['machine_id'] ) {
+            $bits[] = (string) $wpdb->get_var( $wpdb->prepare( "SELECT machine_code FROM {$t['machines']} WHERE id=%d", $f['machine_id'] ) );
+        }
+        if ( $f['from'] || $f['to'] ) {
+            $bits[] = ( $f['from'] ?: '…' ) . ' a ' . ( $f['to'] ?: 'hoy' );
+        } else {
+            $bits[] = 'Todo el historial';
+        }
+        return implode( ' · ', array_filter( $bits ) );
+    }
+
+    private static function interv_filter_bar( $f ) {
+        echo '<div class="cmh-panel"><form method="get" class="cmh-report-filters">'
+            . '<input type="hidden" name="page" value="cmh-client">'
+            . '<input type="hidden" name="view" value="interventions">';
+        foreach ( [ 'machine_id', 'city_id', 'company_id' ] as $k )
+            if ( $f[ $k ] ) echo '<input type="hidden" name="' . esc_attr( $k ) . '" value="' . intval( $f[ $k ] ) . '">';
+        if ( $f['affects'] ) echo '<input type="hidden" name="affects" value="1">';
+
+        echo '<label>Tipo<select name="type"><option value="">— Todos —</option>';
+        foreach ( CMH_Taxonomy::mtype_labels() as $k => $v )
+            echo '<option value="' . esc_attr( $k ) . '" ' . selected( $f['type'], $k, false ) . '>' . esc_html( $v ) . '</option>';
+        echo '</select></label>'
+            . '<label>Pago<select name="pay">'
+            . '<option value="">— Todo —</option>'
+            . '<option value="pending" ' . selected( $f['pay'], 'pending', false ) . '>Pendiente por pagar</option>'
+            . '<option value="paid" ' . selected( $f['pay'], 'paid', false ) . '>Pagadas</option>'
+            . ( CMH_Taxonomy::quote_pstates() ? '<option value="quote" ' . selected( $f['pay'], 'quote', false ) . '>En trámite</option>' : '' )
+            . '</select></label>'
+            . '<label>Desde<input type="month" name="from" value="' . esc_attr( $f['from'] ) . '"></label>'
+            . '<label>Hasta<input type="month" name="to" value="' . esc_attr( $f['to'] ) . '"></label>'
+            . '<button class="button button-primary">Filtrar</button>'
+            . '<a class="button" href="' . esc_url( self::interv_url( [ 'machine_id' => $f['machine_id'] ] ) ) . '">Limpiar</a>'
+            . '</form></div>';
     }
 
     /** v2.0 — Reportería del cliente: mismo motor, su alcance y su vocabulario. */
@@ -359,7 +551,7 @@ class CMH_Client {
     private static function page_my_equipment() {
         global $wpdb; $t = CMH_Core::tables();
         $uid     = get_current_user_id();
-        $is_mgr  = current_user_can( 'edit_others_posts' );
+        $is_mgr  = self::unrestricted( $uid );
         $city_id = intval( $_GET['city_id'] ?? 0 );
 
         CMH_Admin::page_header( 'Mis Equipos', [ [ 'label' => 'Mis Equipos' ] ] );
@@ -413,13 +605,17 @@ class CMH_Client {
             $avail  = $base > 0 ? min( 100.0, max( 0.0, ( $base - $dt ) / $base * 100 ) ) : null;
             $acc    = $avail === null ? 'blue' : ( $avail >= 90 ? 'ok' : ( $avail >= 70 ? 'warn' : 'danger' ) );
 
+            // v2.9 — Cada cuadro lleva a la lista con el mismo periodo y sucursal.
+            $q = [ 'city_id' => $city_id, 'from' => $f['from'], 'to' => $f['to'] ];
+
             echo '<div class="cmh-grid">';
-            CMH_Admin::metric_card( 'Disponibilidad', CMH_Metrics::fmt_pct( $avail ), 'últimos 12 meses', $acc );
-            CMH_Admin::metric_card( 'Intervenciones', (int) $totals->total,   'últimos 12 meses', 'blue' );
-            CMH_Admin::metric_card( 'Averías',        (int) $totals->averias, 'últimos 12 meses', 'danger' );
-            CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $totals->costo ), 'últimos 12 meses', 'blue' );
+            CMH_Admin::metric_card( 'Disponibilidad', CMH_Metrics::fmt_pct( $avail ), 'últimos 12 meses', $acc,
+                CMH_Admin::admin_url( 'cmh-client-reports', array_filter( [ 'city_id' => $city_id ] ) ) );
+            CMH_Admin::metric_card( 'Intervenciones', (int) $totals->total,   'últimos 12 meses', 'blue', self::interv_url( $q ) );
+            CMH_Admin::metric_card( 'Averías',        (int) $totals->averias, 'últimos 12 meses', 'danger', self::interv_url( $q + [ 'affects' => 1 ] ) );
+            CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $totals->costo ), 'últimos 12 meses', 'blue', self::interv_url( $q ) );
             CMH_Admin::metric_card( 'Pendiente por pagar', CMH_Reports::money( $totals->por_cobrar ),
-                'saldo a tu cargo', (float) $totals->por_cobrar > 0 ? 'warn' : 'ok' );
+                'saldo a tu cargo', (float) $totals->por_cobrar > 0 ? 'warn' : 'ok', self::interv_url( $q + [ 'pay' => 'pending' ] ) );
             echo '</div>';
         }
 
@@ -540,16 +736,22 @@ class CMH_Client {
             . '<a class="button" href="' . esc_url( CMH_Admin::admin_url( 'cmh-client' ) ) . '">Volver</a>'
             . '</div></div>';
 
+        // v2.9 — Los cuadros con lista detrás llevan a ella, ya filtrada.
+        $q   = [ 'machine_id' => $machine_id ];
+        $mes = sprintf( '%04d-%02d', $year, $month );
+
         echo '<div class="cmh-grid">';
-        CMH_Admin::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ), CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc );
-        CMH_Admin::metric_card( 'Averías este mes', (int) CMH_Metrics::averia_count( $machine_id, $month, $year ), 'mes actual', 'warn' );
+        CMH_Admin::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ), CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc,
+            CMH_Admin::admin_url( 'cmh-client-reports', [ 'machine_id' => $machine_id ] ) );
+        CMH_Admin::metric_card( 'Averías este mes', (int) CMH_Metrics::averia_count( $machine_id, $month, $year ), 'mes actual', 'warn',
+            self::interv_url( $q + [ 'affects' => 1, 'from' => $mes, 'to' => $mes ] ) );
         CMH_Admin::metric_card( 'Horómetro', number_format( (float) $m->current_hourmeter, 2, ',', '.' ) . ' h', 'actual', 'blue' );
         CMH_Admin::metric_card( 'Próximo mantenimiento', $m->next_maintenance_date ?: '—', 'programado', 'blue' );
-        CMH_Admin::metric_card( 'Intervenciones', (int) $stats->total, 'historial', 'blue' );
-        CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $stats->costo ), 'historial', 'blue' );
-        CMH_Admin::metric_card( 'Pagado', CMH_Reports::money( $stats->pagado ), 'historial', 'ok' );
+        CMH_Admin::metric_card( 'Intervenciones', (int) $stats->total, 'historial', 'blue', self::interv_url( $q ) );
+        CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $stats->costo ), 'historial', 'blue', self::interv_url( $q ) );
+        CMH_Admin::metric_card( 'Pagado', CMH_Reports::money( $stats->pagado ), 'historial', 'ok', self::interv_url( $q + [ 'pay' => 'paid' ] ) );
         CMH_Admin::metric_card( 'Pendiente por pagar', CMH_Reports::money( $stats->por_cobrar ),
-            'saldo a tu cargo', (float) $stats->por_cobrar > 0 ? 'warn' : 'ok' );
+            'saldo a tu cargo', (float) $stats->por_cobrar > 0 ? 'warn' : 'ok', self::interv_url( $q + [ 'pay' => 'pending' ] ) );
         echo '</div>';
 
         // Indicadores gráficos del equipo, con el vocabulario del cliente.
@@ -589,12 +791,12 @@ class CMH_Client {
         foreach ( $rows as $r ) {
             echo '<tr>'
                 . '<td>' . esc_html( $r->intervention_date ) . '</td>'
-                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type ) . '</td>'
+                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' ) . '</td>'
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td>' . esc_html( $r->downtime_hours ) . ' h</td>'
                 . '<td>' . esc_html( CMH_Reports::money( $r->cost ) ) . '</td>'
                 . '<td>' . CMH_Admin::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) . '</td>'
-                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( $r->file_url ) . '">Ver</a>' : '—' ) . '</td>'
+                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>'
                 . '</tr>';
         }
         echo '</tbody></table>';
@@ -626,7 +828,7 @@ class CMH_Client {
     }
 
     /** v2.3 — Delegado en la taxonomía configurable. */
-    private static function mtype_badge( $type ) {
-        return CMH_Taxonomy::mtype_badge( $type );
+    private static function mtype_badge( $type, $level = '' ) {
+        return CMH_Taxonomy::mtype_badge( $type, $level );
     }
 }

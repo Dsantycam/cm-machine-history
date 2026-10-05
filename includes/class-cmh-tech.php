@@ -16,9 +16,17 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class CMH_Tech {
 
+    /**
+     * v2.9 — «Completada sin formato»: el trabajo ya se hizo —el reloj de horas
+     * se detiene—, pero falta diligenciar el formato (la firma del cliente, por
+     * ejemplo). La tarea sigue a la vista del técnico para que lo envíe, no
+     * cuenta como vencida, y se cierra sola como «Completada» cuando el formato
+     * llega (CMH_Integration::close_task_for_machine).
+     */
     const TASK_STATUSES = [
         'pendiente'   => 'Pendiente',
         'en_progreso' => 'En progreso',
+        'sin_formato' => 'Completada sin formato',
         'completada'  => 'Completada',
     ];
 
@@ -35,9 +43,10 @@ class CMH_Tech {
     }
 
     public static function admin_menu() {
-        // El menú "Mis Máquinas" es solo para técnicos. Los administradores/editores
-        // tienen su propio menú "Máquinas" y no deben ver este panel reducido.
-        if ( current_user_can( 'edit_others_posts' ) ) return;
+        // El menú "Mis Máquinas" es para quien trabaja como técnico. Un administrador
+        // puro no lo ve (tiene «Máquinas»), pero v2.9: si además tiene el rol de
+        // técnico, sí —también le asignan tareas y tiene que poder hacerlas—.
+        if ( ! CMH_Core::is_tech_user() ) return;
 
         add_menu_page(
             'Mis Máquinas', 'Mis Máquinas', 'cmh_tech', 'cmh-tech',
@@ -154,7 +163,7 @@ class CMH_Tech {
     public static function tasks_for_machine( $machine_id ) {
         global $wpdb; $t = CMH_Core::tables();
         return $wpdb->get_results( $wpdb->prepare(
-            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d ORDER BY FIELD(status,'en_progreso','pendiente','completada'), due_date IS NULL, due_date ASC, id DESC",
+            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d ORDER BY FIELD(status,'en_progreso','pendiente','sin_formato','completada'), due_date IS NULL, due_date ASC, id DESC",
             $machine_id
         ) );
     }
@@ -167,7 +176,7 @@ class CMH_Tech {
             "SELECT ta.*, m.machine_code, m.id machine_id
              FROM {$t['tasks']} ta JOIN {$t['machines']} m ON m.id=ta.machine_id
              WHERE ta.assigned_to=%d $extra
-             ORDER BY FIELD(ta.status,'en_progreso','pendiente','completada'), ta.due_date IS NULL, ta.due_date ASC, ta.id DESC",
+             ORDER BY FIELD(ta.status,'en_progreso','pendiente','sin_formato','completada'), ta.due_date IS NULL, ta.due_date ASC, ta.id DESC",
             $user_id
         ) );
     }
@@ -306,40 +315,63 @@ class CMH_Tech {
             if ( ! self::can_access_machine( (int) $task->machine_id ) ) wp_die( 'No tienes acceso a esta tarea.' );
         }
 
-        $status = ( ( $_POST['to'] ?? 'completada' ) === 'pendiente' ) ? 'pendiente' : 'completada';
+        $to     = sanitize_key( $_POST['to'] ?? 'completada' );
+        $status = in_array( $to, [ 'pendiente', 'sin_formato' ], true ) ? $to : 'completada';
 
-        $wpdb->update( $t['tasks'],
-            [ 'status' => $status, 'updated_at' => current_time( 'mysql' ) ],
-            [ 'id' => $task_id ]
-        );
-        // El reloj de horas sigue al estado: cerrar la tarea cierra el tramo.
+        // De «sin formato» a «completada» se conserva la fecha en que se terminó
+        // el trabajo: es la que mide el cumplimiento.
+        $data = [ 'status' => $status ];
+        if ( ! ( $task->status === 'sin_formato' && $status === 'completada' ) ) $data['updated_at'] = current_time( 'mysql' );
+        $wpdb->update( $t['tasks'], $data, [ 'id' => $task_id ] );
+        // El reloj de horas sigue al estado: cerrar la tarea cierra el tramo, y
+        // «sin formato» también, porque el trabajo ya terminó.
         CMH_Time::on_status_change( $task, $status, get_current_user_id() );
 
         $fallback = $is_admin
             ? CMH_Admin::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $task->machine_id ] )
             : CMH_Admin::admin_url( 'cmh-tech' );
 
-        CMH_Admin::redirect_to( $fallback,
-            $status === 'completada' ? 'Tarea completada.' : 'Tarea reabierta como pendiente.' );
+        $msgs = [
+            'completada'  => 'Tarea completada.',
+            'sin_formato' => 'Trabajo terminado: el tiempo quedó detenido. La tarea se cierra sola cuando llegue el formato.',
+            'pendiente'   => 'Tarea reabierta como pendiente.',
+        ];
+        CMH_Admin::redirect_to( $fallback, $msgs[ $status ] );
     }
 
-    /** Botón de un clic para cerrar o reabrir una tarea. */
+    /**
+     * Botones de un clic para cerrar o reabrir una tarea.
+     * v2.9 — Mientras no esté cerrada, ofrece también «Terminé, falta formato».
+     */
     public static function complete_button( $task, $back = '' ) {
         $done = ( $task->status === 'completada' );
-        return '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline">'
-            . '<input type="hidden" name="action" value="cmh_complete_task">'
-            . '<input type="hidden" name="task_id" value="' . intval( $task->id ) . '">'
-            . '<input type="hidden" name="to" value="' . ( $done ? 'pendiente' : 'completada' ) . '">'
-            . ( $back ? '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">' : '' )
-            . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
-            . '<button class="button button-small' . ( $done ? '' : ' button-primary' ) . '">'
-            . ( $done ? 'Reabrir' : 'Completar' ) . '</button></form>';
+        $btn  = function ( $to, $label, $primary, $title = '' ) use ( $task, $back ) {
+            return '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:inline">'
+                . '<input type="hidden" name="action" value="cmh_complete_task">'
+                . '<input type="hidden" name="task_id" value="' . intval( $task->id ) . '">'
+                . '<input type="hidden" name="to" value="' . esc_attr( $to ) . '">'
+                . ( $back ? '<input type="hidden" name="redirect_to" value="' . esc_url( $back ) . '">' : '' )
+                . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                . '<button class="button button-small' . ( $primary ? ' button-primary' : '' ) . '"'
+                . ( $title ? ' title="' . esc_attr( $title ) . '"' : '' ) . '>'
+                . esc_html( $label ) . '</button></form>';
+        };
+
+        if ( $done ) return $btn( 'pendiente', 'Reabrir', false );
+
+        $html = $btn( 'completada', 'Completar', true );
+        if ( $task->status !== 'sin_formato' ) {
+            $html .= ' ' . $btn( 'sin_formato', 'Terminé, falta formato', false,
+                'El trabajo está hecho y el tiempo se detiene, pero aún falta diligenciar el formato (p. ej. la firma del cliente).' );
+        }
+        return $html;
     }
     public static function task_status_badge( $status ) {
         $status = sanitize_key( $status );
         $styles = [
             'pendiente'   => 'background:#fff3cd;color:#7a4f00',
             'en_progreso' => 'background:#e7f0fb;color:#1c4d80',
+            'sin_formato' => 'background:#f1e8fb;color:#5b2a86',
             'completada'  => 'background:#e6f4ea;color:#1a6630',
         ];
         $style = $styles[ $status ] ?? 'background:#f0f0f1;color:#3c434a';
@@ -361,7 +393,9 @@ class CMH_Tech {
     private static function page_my_machines() {
         global $wpdb; $t = CMH_Core::tables();
         $uid    = get_current_user_id();
-        $is_mgr = current_user_can( 'edit_others_posts' );
+        // v2.9 — Un administrador que además es técnico ve SU panel, no la
+        // previsualización con toda la flota.
+        $is_mgr = current_user_can( 'edit_others_posts' ) && ! CMH_Core::is_tech_user( $uid );
 
         CMH_Admin::page_header( 'Mis Máquinas', [ [ 'label' => 'Mis Máquinas' ] ] );
 
@@ -407,7 +441,7 @@ class CMH_Tech {
                 echo '<tr>'
                     . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 20 ) ) . '</span>' : '' ) . '</td>'
                     . '<td>' . esc_html( $ta->machine_code ) . '</td>'
-                    . '<td>' . self::due_label( $ta->due_date ) . '</td>'
+                    . '<td>' . self::due_label( $ta->due_date, $ta->status ) . '</td>'
                     . '<td>' . self::task_status_badge( $ta->status ) . '</td>'
                     . '<td>' . self::open_form_control( $ta, $back ) . '</td>'
                     . '<td class="cmh-row-actions">' . self::complete_button( $ta, $back )
@@ -554,7 +588,7 @@ class CMH_Tech {
         foreach ( $tasks as $ta ) {
             echo '<tr>'
                 . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( $ta->notes ) . '</span>' : '' ) . '</td>'
-                . '<td>' . self::due_label( $ta->due_date ) . '</td>'
+                . '<td>' . self::due_label( $ta->due_date, $ta->status ) . '</td>'
                 . '<td>' . self::task_status_badge( $ta->status ) . '</td>'
                 . '<td>' . self::open_form_control( $ta, $back ) . '</td>'
                 . '<td><form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" style="display:flex;gap:6px;align-items:center">'
@@ -588,10 +622,10 @@ class CMH_Tech {
         foreach ( $rows as $r ) {
             echo '<tr>'
                 . '<td>' . esc_html( $r->intervention_date ) . '</td>'
-                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type ) . '</td>'
+                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' ) . '</td>'
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td>' . esc_html( $r->downtime_hours ) . ' h</td>'
-                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( $r->file_url ) . '">Ver</a>' : '—' ) . '</td>'
+                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>'
                 . '</tr>';
         }
         echo '</tbody></table>';
@@ -615,6 +649,7 @@ class CMH_Tech {
             . '<option value="evaluacion">Evaluación</option>'
             . '</select>'
             . '<label>Técnico</label><input name="technician" value="' . esc_attr( $me->display_name ) . '">'
+            . CMH_Admin::mlevel_field()
             . '<label>Horómetro</label><input type="number" step="0.01" name="hourmeter" min="0" id="cmh-hourmeter-input" data-last-hourmeter="' . esc_attr( $last_hourmeter ) . '">'
             . '<div id="cmh-hourmeter-warn" class="cmh-field-warning" style="display:none"></div>';
 
@@ -635,8 +670,10 @@ class CMH_Tech {
             . '<button class="button button-primary">Guardar intervención</button></form>';
     }
 
-    private static function due_label( $due_date ) {
+    private static function due_label( $due_date, $status = '' ) {
         if ( ! $due_date ) return '<span style="color:#646970">—</span>';
+        // v2.9 — Lo que ya se hizo no vence: solo se muestra la fecha.
+        if ( in_array( $status, [ 'completada', 'sin_formato' ], true ) ) return esc_html( $due_date );
         $days = CMH_Metrics::maintenance_days( $due_date );
         if ( $days === null ) return esc_html( $due_date );
         if ( $days < 0 )      return '<span style="color:#d63638">' . esc_html( $due_date ) . ' (vencida hace ' . abs( $days ) . ' d)</span>';
@@ -645,8 +682,8 @@ class CMH_Tech {
     }
 
     /** v2.3 — Delegado en la taxonomía configurable. */
-    private static function mtype_badge( $type ) {
-        return CMH_Taxonomy::mtype_badge( $type );
+    private static function mtype_badge( $type, $level = '' ) {
+        return CMH_Taxonomy::mtype_badge( $type, $level );
     }
 
     // =========================================================================
@@ -708,6 +745,7 @@ class CMH_Tech {
             'cost'                 => 0,
             'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, 0 ),
             'failure_system'       => CMH_Taxonomy::systems_to_string( (array) ( $_POST['failure_system'] ?? [] ) ),
+            'mtto_level'           => CMH_Admin::mlevel_from_post(),
             'parts'                => sanitize_textarea_field( $_POST['parts'] ),
             'services'             => sanitize_textarea_field( $_POST['services'] ),
             'observations'         => sanitize_textarea_field( $_POST['observations'] ),

@@ -27,10 +27,9 @@ class CMH_Integration {
 
         $forms = [];
         foreach ( self::config() as $id => $cfg ) {
-            $forms[ $id ] = [
-                'machine_field' => self::slug( $cfg, 'machine' ),
-                'contact_field' => self::slug( $cfg, 'contact' ),
-            ];
+            // v2.9 — Solo el campo de máquina: el resto lo decide el prellenado
+            // configurado, no el JS.
+            $forms[ $id ] = [ 'machine_field' => self::slug( $cfg, 'machine' ) ];
         }
 
         $machine_code = isset( $_GET['cmh_machine'] ) ? sanitize_text_field( wp_unslash( $_GET['cmh_machine'] ) ) : '';
@@ -40,6 +39,8 @@ class CMH_Integration {
             'ajaxurl'     => admin_url( 'admin-ajax.php' ),
             'formConfigs' => $forms,
             'prefill'     => $machine_code ? CMH_Forms::resolve_prefill( $machine_code, $task_id ) : [],
+            // Para el aviso verde bajo el campo: lo mismo que ve un visitante.
+            'machine'     => $machine_code ? CMH_Admin::machine_summary( $machine_code ) : null,
         ] );
     }
 
@@ -259,6 +260,20 @@ class CMH_Integration {
             }
         }
 
+        // ── v2.9 — Tipo de mantenimiento preventivo (250H, 500H…) ─────────────
+        // Igual que el sistema: si el formato no lo trae, queda vacío y no se
+        // muestra. Si lo trae, es un preventivo —reprograma el próximo
+        // mantenimiento—, salvo que las reglas ya lo hayan marcado como algo
+        // que descuenta disponibilidad: una avería no se disfraza de preventivo.
+        $mtto_level = '';
+        if ( self::slug( $cfg, 'mtto_level' ) ) {
+            $raw        = self::field( $data, self::slug( $cfg, 'mtto_level' ) );
+            $mtto_level = self::match_level( $raw, $cfg );
+            if ( $mtto_level !== '' && ! CMH_Taxonomy::mtype_affects( $maintenance_type ) ) {
+                $maintenance_type = 'preventivo';
+            }
+        }
+
         $obs = self::human( self::field( $data, self::slug( $cfg, 'observations' ) ) );
         $rem = self::human( self::field( $data, self::slug( $cfg, 'remission' ) ) );
         if ( $rem ) $obs = trim( $obs . "\nRemisión: " . $rem );
@@ -283,6 +298,7 @@ class CMH_Integration {
             'services'          => self::human( self::field( $data, self::slug( $cfg, 'services' ) ) ),
             'observations'      => $obs,
             'failure_system'    => $failure_system,
+            'mtto_level'        => $mtto_level,
             'cost'              => $cost,
             'paid_amount'       => $paid,
             'payment_status'    => $pay_status,
@@ -302,6 +318,10 @@ class CMH_Integration {
      *      reconoce el nombre, la más antigua.
      *   3. Si no hay ninguna en curso, no se toca nada.
      *
+     * v2.9 — También cuentan las «Completadas sin formato»: justamente están
+     * esperando este envío para cerrarse. Van primero, porque son las que ya
+     * se dieron por hechas.
+     *
      * Se puede apagar desde «Máquinas → Ajustes».
      *
      * @return int  ID de la tarea cerrada, o 0.
@@ -312,7 +332,8 @@ class CMH_Integration {
         if ( class_exists( 'CMH_Schedule' ) && ! CMH_Schedule::setting( 'auto_complete_task' ) ) return 0;
 
         $tasks = $wpdb->get_results( $wpdb->prepare(
-            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND status='en_progreso' ORDER BY id ASC",
+            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND status IN ('sin_formato','en_progreso')
+             ORDER BY FIELD(status,'sin_formato','en_progreso'), id ASC",
             (int) $machine_id
         ) );
         if ( ! $tasks ) return 0;
@@ -330,10 +351,12 @@ class CMH_Integration {
             }
         }
 
-        $wpdb->update( $t['tasks'],
-            [ 'status' => 'completada', 'updated_at' => current_time( 'mysql' ) ],
-            [ 'id' => (int) $chosen->id ]
-        );
+        // Si ya estaba «sin formato», el trabajo terminó cuando la marcaron así:
+        // se conserva esa fecha para que el cumplimiento no la cuente tarde
+        // solo porque la firma llegó después.
+        $data = [ 'status' => 'completada' ];
+        if ( $chosen->status !== 'sin_formato' ) $data['updated_at'] = current_time( 'mysql' );
+        $wpdb->update( $t['tasks'], $data, [ 'id' => (int) $chosen->id ] );
 
         // El reloj de horas para cuando para la tarea.
         if ( class_exists( 'CMH_Time' ) ) CMH_Time::on_status_change( $chosen, 'completada', 0 );
@@ -459,6 +482,36 @@ class CMH_Integration {
         return $out;
     }
 
+    /**
+     * v2.9 — Clave del tipo de mantenimiento preventivo que trae el envío.
+     * Uno solo: si el campo trae varios, gana el primero que se reconozca.
+     * Orden: traducción del formato → lista del plugin → alta automática.
+     */
+    private static function match_level( $raw, $cfg ) {
+        $values = is_array( $raw )
+            ? $raw
+            : preg_split( '/\s*[,;|]\s*/', (string) self::human( $raw ) );
+
+        $labels = CMH_Taxonomy::mlevels();
+        foreach ( (array) $values as $value ) {
+            $value = trim( (string) self::human( $value ) );
+            if ( $value === '' ) continue;
+            $norm = self::norm( $value );
+
+            foreach ( (array) ( $cfg['level_map'] ?? [] ) as $needle => $mapped ) {
+                if ( $mapped !== '' && self::norm( $needle ) === $norm ) return $mapped;
+            }
+            // Contra la lista, sin que cuenten el prefijo, los espacios ni los signos.
+            $key = CMH_Taxonomy::mlevel_key( $value );
+            foreach ( $labels as $slug => $l ) {
+                if ( $key !== '' && CMH_Taxonomy::mlevel_key( $l['label'] ) === $key ) return $slug;
+            }
+            $slug = CMH_Taxonomy::ensure_mlevel( $value );
+            if ( $slug !== '' ) return $slug;
+        }
+        return '';
+    }
+
     /** Intenta reconocer el sistema contra la taxonomía del plugin. */
     private static function guess_system( $selected ) {
         $systems = CMH_Admin::failure_systems();
@@ -525,6 +578,7 @@ class CMH_Integration {
             'payment_status'      => $p['payment_status'],
             'affects_availability'=> $p['affects'],
             'failure_system'      => CMH_Taxonomy::systems_to_string( $p['failure_system'] ),
+            'mtto_level'          => $p['mtto_level'] !== '' ? $p['mtto_level'] : null,
             'parts'               => sanitize_textarea_field( $p['parts'] ),
             'services'            => sanitize_textarea_field( $p['services'] ),
             'observations'        => sanitize_textarea_field( $p['observations'] ),
@@ -625,10 +679,19 @@ class CMH_Integration {
 
         if ( ! is_dir( $our_dir ) ) wp_mkdir_p( $our_dir );
         if ( is_dir( $our_dir ) ) {
-            $dst = $our_dir . '/' . basename( $candidate );
-            if ( ! file_exists( $dst ) && copy( $candidate, $dst ) ) {
+            // v2.9 — Si ya había un archivo con ese nombre, antes NO se copiaba y
+            // la intervención quedaba apuntando a uploads/e2pdf, que E2PDF protege
+            // con .htaccess: de ahí los «403 Forbidden» al pulsar «Ver PDF». Ahora
+            // se reutiliza si es el mismo archivo, o se guarda con otro nombre.
+            $name = basename( $candidate );
+            $dst  = $our_dir . '/' . $name;
+            if ( file_exists( $dst ) && filesize( $dst ) !== filesize( $candidate ) ) {
+                $name = wp_unique_filename( $our_dir, $name );
+                $dst  = $our_dir . '/' . $name;
+            }
+            if ( file_exists( $dst ) || copy( $candidate, $dst ) ) {
                 $store_path = $dst;
-                $store_url  = esc_url_raw( set_url_scheme( $our_url . '/' . basename( $candidate ) ) );
+                $store_url  = esc_url_raw( set_url_scheme( $our_url . '/' . rawurlencode( $name ) ) );
             }
         }
 
