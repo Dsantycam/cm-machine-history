@@ -399,6 +399,7 @@ class CMH_Client {
             'q'          => '',
             'from'       => $month( $_GET['from'] ?? '' ),
             'to'         => $month( $_GET['to'] ?? '' ),
+            'brand'      => sanitize_text_field( wp_unslash( $_GET['brand'] ?? '' ) ),
         ];
         if ( $f['from'] && $f['to'] && $f['from'] > $f['to'] ) { $x = $f['from']; $f['from'] = $f['to']; $f['to'] = $x; }
         return $f;
@@ -413,9 +414,6 @@ class CMH_Client {
         // parámetro manipulado en la URL no puede sacar datos de otra empresa.
         $where = CMH_Admin::interv_where( $f ) ?: 'WHERE 1=1';
         $where .= self::scope_where( $uid );
-        if ( $f['city_id'] ) $where .= $wpdb->prepare( ' AND m.city_id=%d', $f['city_id'] );
-        if ( $f['from'] )    $where .= $wpdb->prepare( ' AND i.intervention_date >= %s', $f['from'] . '-01' );
-        if ( $f['to'] )      $where .= $wpdb->prepare( ' AND i.intervention_date <= %s', date( 'Y-m-t', strtotime( $f['to'] . '-01' ) ) );
 
         $rows = $wpdb->get_results(
             "SELECT i.*, m.machine_code, ci.name AS city_name, MAX(fi.file_url) AS file_url
@@ -452,12 +450,14 @@ class CMH_Client {
             . '<a class="button" href="' . esc_url( $back ) . '">Volver</a>'
             . '</div></div>';
 
+        // v2.9.1 — Los cuadros afinan la lista sin perder el alcance actual.
+        $sin_pago = array_merge( $f, [ 'pay' => '' ] );
         echo '<div class="cmh-grid">';
-        CMH_Admin::metric_card( 'Intervenciones', intval( $totals->n ?? 0 ), 'con este filtro', 'blue' );
-        CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $totals->costo ?? 0 ), 'con este filtro', 'blue' );
-        CMH_Admin::metric_card( 'Pagado', CMH_Reports::money( $totals->pagado ?? 0 ), 'con este filtro', 'ok' );
+        CMH_Admin::metric_card( 'Intervenciones', intval( $totals->n ?? 0 ), 'con este filtro', 'blue', self::interv_url( $sin_pago ) );
+        CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $totals->costo ?? 0 ), 'con este filtro', 'blue', self::interv_url( $sin_pago ) );
+        CMH_Admin::metric_card( 'Pagado', CMH_Reports::money( $totals->pagado ?? 0 ), 'con este filtro', 'ok', self::interv_url( array_merge( $sin_pago, [ 'pay' => 'paid' ] ) ) );
         CMH_Admin::metric_card( 'Pendiente por pagar', CMH_Reports::money( $totals->saldo ?? 0 ),
-            'saldo a tu cargo', (float) ( $totals->saldo ?? 0 ) > 0 ? 'warn' : 'ok' );
+            'saldo a tu cargo', (float) ( $totals->saldo ?? 0 ) > 0 ? 'warn' : 'ok', self::interv_url( array_merge( $sin_pago, [ 'pay' => 'pending' ] ) ) );
         echo '</div>';
 
         self::interv_filter_bar( $f );
@@ -522,6 +522,7 @@ class CMH_Client {
             . '<input type="hidden" name="view" value="interventions">';
         foreach ( [ 'machine_id', 'city_id', 'company_id' ] as $k )
             if ( $f[ $k ] ) echo '<input type="hidden" name="' . esc_attr( $k ) . '" value="' . intval( $f[ $k ] ) . '">';
+        if ( $f['brand'] !== '' ) echo '<input type="hidden" name="brand" value="' . esc_attr( $f['brand'] ) . '">';
         if ( $f['affects'] ) echo '<input type="hidden" name="affects" value="1">';
 
         echo '<label>Tipo<select name="type"><option value="">— Todos —</option>';
@@ -745,8 +746,8 @@ class CMH_Client {
             CMH_Admin::admin_url( 'cmh-client-reports', [ 'machine_id' => $machine_id ] ) );
         CMH_Admin::metric_card( 'Averías este mes', (int) CMH_Metrics::averia_count( $machine_id, $month, $year ), 'mes actual', 'warn',
             self::interv_url( $q + [ 'affects' => 1, 'from' => $mes, 'to' => $mes ] ) );
-        CMH_Admin::metric_card( 'Horómetro', number_format( (float) $m->current_hourmeter, 2, ',', '.' ) . ' h', 'actual', 'blue' );
-        CMH_Admin::metric_card( 'Próximo mantenimiento', $m->next_maintenance_date ?: '—', 'programado', 'blue' );
+        CMH_Admin::metric_card( 'Horómetro', number_format( (float) $m->current_hourmeter, 2, ',', '.' ) . ' h', 'actual', 'blue', self::interv_url( $q ) );
+        CMH_Admin::metric_card( 'Próximo mantenimiento', $m->next_maintenance_date ?: '—', 'programado', 'blue', self::interv_url( $q + [ 'type' => 'preventivo' ] ) );
         CMH_Admin::metric_card( 'Intervenciones', (int) $stats->total, 'historial', 'blue', self::interv_url( $q ) );
         CMH_Admin::metric_card( 'Total facturado', CMH_Reports::money( $stats->costo ), 'historial', 'blue', self::interv_url( $q ) );
         CMH_Admin::metric_card( 'Pagado', CMH_Reports::money( $stats->pagado ), 'historial', 'ok', self::interv_url( $q + [ 'pay' => 'paid' ] ) );

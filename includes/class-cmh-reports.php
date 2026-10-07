@@ -796,24 +796,20 @@ class CMH_Reports {
         $mtbf  = $av > 0 && $base > 0 ? round( max( 0, $base - $dt ) / $av, 2 ) : null;
         $acc   = $avail === null ? 'blue' : ( $avail >= 90 ? 'ok' : ( $avail >= 70 ? 'warn' : 'danger' ) );
 
-        // v2.9 — En el portal, los cuadros con lista detrás llevan a ella con el
-        // mismo alcance y periodo. Al administrador no le cambia nada.
-        $u = function ( $extra = [] ) use ( $f ) {
-            if ( ! self::is_client() ) return '';
-            return CMH_Client::interv_url( array_merge( [
-                'company_id' => $f['company_id'], 'city_id' => $f['city_id'], 'machine_id' => $f['machine_id'],
-                'from' => $f['from'], 'to' => $f['to'],
-            ], $extra ) );
-        };
+        // v2.9.1 — Los cuadros llevan a la lista de intervenciones con el mismo
+        // alcance (empresa, sucursal, marca, máquina) y periodo, para el
+        // administrador y para el cliente. Los de disponibilidad, MTTR y MTBF
+        // llevan a las averías, que es lo que los mueve.
+        $u = function ( $extra = [] ) use ( $f ) { return self::list_url( $f, $extra ); };
 
         echo '<div class="cmh-grid">';
-        CMH_Admin::metric_card( 'Disponibilidad', CMH_Metrics::fmt_pct( $avail ), 'periodo completo', $acc );
-        CMH_Admin::metric_card( 'MTTR', CMH_Metrics::fmt_mttr( $mttr ), 'promedio por avería', 'warn' );
-        CMH_Admin::metric_card( 'MTBF', CMH_Metrics::fmt_mttr( $mtbf ), 'operación entre fallas', 'blue' );
+        CMH_Admin::metric_card( 'Disponibilidad', CMH_Metrics::fmt_pct( $avail ), 'periodo completo', $acc, $u( [ 'affects' => 1 ] ) );
+        CMH_Admin::metric_card( 'MTTR', CMH_Metrics::fmt_mttr( $mttr ), 'promedio por avería', 'warn', $u( [ 'affects' => 1 ] ) );
+        CMH_Admin::metric_card( 'MTBF', CMH_Metrics::fmt_mttr( $mtbf ), 'operación entre fallas', 'blue', $u( [ 'affects' => 1 ] ) );
         if ( $comp !== null ) {
             $cacc = $comp['pct'] === null ? 'blue' : ( $comp['pct'] >= 90 ? 'ok' : ( $comp['pct'] >= 70 ? 'warn' : 'danger' ) );
             CMH_Admin::metric_card( 'Cumplimiento preventivo', self::pct( $comp['pct'] ),
-                $comp['programadas'] . ' programado(s)', $cacc );
+                $comp['programadas'] . ' programado(s)', $cacc, '#cmh-cumplimiento' );
         }
         CMH_Admin::metric_card( 'Intervenciones', (int) $totals->total,       'en el periodo', 'blue', $u() );
         CMH_Admin::metric_card( 'Preventivos',    (int) $totals->preventivos, 'en el periodo', 'ok', $u( [ 'type' => 'preventivo' ] ) );
@@ -828,6 +824,30 @@ class CMH_Reports {
                 self::L( 'tramite_hint' ), 'blue', $u( [ 'pay' => 'quote' ] ) );
         }
         echo '</div>';
+    }
+
+    /**
+     * v2.9.1 — Lista de intervenciones con el alcance y periodo del reporte.
+     * El cliente va a la suya (acotada a lo que tiene asignado); el
+     * administrador, a «Intervenciones».
+     */
+    public static function list_url( $f, $extra = [] ) {
+        $args = array_merge( [
+            'company_id' => $f['company_id'] ?? 0, 'city_id' => $f['city_id'] ?? 0,
+            'machine_id' => $f['machine_id'] ?? 0, 'brand'   => $f['brand'] ?? '',
+            'from'       => $f['from'] ?? '',      'to'      => $f['to'] ?? '',
+        ], $extra );
+        return self::is_client() ? CMH_Client::interv_url( $args ) : CMH_Admin::interv_url( $args );
+    }
+
+    /** v2.9.1 — Tareas detrás del cumplimiento: «Equipo técnico» (solo admin). */
+    private static function tasks_url( $f ) {
+        if ( self::is_client() ) return '';
+        return CMH_Admin::admin_url( CMH_SLUG . '-time', array_filter( [
+            'company_id' => $f['company_id'] ?? 0,
+            'machine_id' => $f['machine_id'] ?? 0,
+            'tasks'      => 'todas',
+        ] ) ) . '#cmh-team-tasks';
     }
 
     /** Tendencia mensual: gráfica de disponibilidad + tabla mes a mes. */
@@ -924,15 +944,15 @@ class CMH_Reports {
 
         $prom = (int) $totals->total > 0 ? (float) $totals->costo / (int) $totals->total : 0;
         echo '<div class="cmh-grid" style="margin-top:16px">';
-        CMH_Admin::metric_card( self::L( 'costo_total' ), self::money( $totals->costo ),  'periodo', 'blue' );
-        CMH_Admin::metric_card( self::L( 'pagado' ),      self::money( $totals->pagado ), 'periodo', 'ok' );
+        CMH_Admin::metric_card( self::L( 'costo_total' ), self::money( $totals->costo ),  'periodo', 'blue', self::list_url( $f ) );
+        CMH_Admin::metric_card( self::L( 'pagado' ),      self::money( $totals->pagado ), 'periodo', 'ok', self::list_url( $f, [ 'pay' => 'paid' ] ) );
         CMH_Admin::metric_card( self::L( 'por_cobrar' ),  self::money( $totals->por_cobrar ),
-            self::L( 'saldo_hint' ), (float) $totals->por_cobrar > 0 ? 'warn' : 'ok' );
+            self::L( 'saldo_hint' ), (float) $totals->por_cobrar > 0 ? 'warn' : 'ok', self::list_url( $f, [ 'pay' => 'pending' ] ) );
         if ( CMH_Taxonomy::quote_pstates() ) {
             CMH_Admin::metric_card( self::L( 'en_tramite' ), self::money( $totals->en_tramite ),
-                self::L( 'tramite_hint' ), 'blue' );
+                self::L( 'tramite_hint' ), 'blue', self::list_url( $f, [ 'pay' => 'quote' ] ) );
         }
-        CMH_Admin::metric_card( 'Costo promedio', self::money( $prom ), 'por intervención', 'blue' );
+        CMH_Admin::metric_card( 'Costo promedio', self::money( $prom ), 'por intervención', 'blue', self::list_url( $f ) );
         echo '</div>';
 
         // La columna de trámite solo existe si el usuario configuró estados así;
@@ -962,7 +982,7 @@ class CMH_Reports {
 
     /** Cumplimiento del plan preventivo. */
     public static function render_compliance( $f, $comp, $export = true ) {
-        echo '<div class="cmh-panel"><div class="cmh-toolbar">'
+        echo '<div class="cmh-panel" id="cmh-cumplimiento"><div class="cmh-toolbar">'
             . '<h2>Cumplimiento del plan preventivo</h2>'
             . ( $export ? '<a class="button" href="' . esc_url( self::export_url( 'compliance', $f ) ) . '">Exportar CSV</a>' : '' )
             . '</div>'
@@ -978,10 +998,10 @@ class CMH_Reports {
         echo '<div class="cmh-grid">';
         $t = $comp['totals'];
         $acc = $t['pct'] === null ? 'blue' : ( $t['pct'] >= 90 ? 'ok' : ( $t['pct'] >= 70 ? 'warn' : 'danger' ) );
-        CMH_Admin::metric_card( 'Cumplimiento', self::pct( $t['pct'] ), 'cerrados a tiempo', $acc );
-        CMH_Admin::metric_card( 'Programados',  $t['programadas'], 'en el periodo', 'blue' );
-        CMH_Admin::metric_card( 'Ejecutados',   $t['ejecutadas'],  'completados',   'ok' );
-        CMH_Admin::metric_card( 'Vencidos',     $t['vencidas'],    'sin cerrar y fuera de fecha', $t['vencidas'] > 0 ? 'danger' : 'ok' );
+        CMH_Admin::metric_card( 'Cumplimiento', self::pct( $t['pct'] ), 'cerrados a tiempo', $acc, self::tasks_url( $f ) );
+        CMH_Admin::metric_card( 'Programados',  $t['programadas'], 'en el periodo', 'blue', self::tasks_url( $f ) );
+        CMH_Admin::metric_card( 'Ejecutados',   $t['ejecutadas'],  'completados',   'ok', self::tasks_url( $f ) );
+        CMH_Admin::metric_card( 'Vencidos',     $t['vencidas'],    'sin cerrar y fuera de fecha', $t['vencidas'] > 0 ? 'danger' : 'ok', self::tasks_url( $f ) );
         echo '</div>';
 
         echo '<div class="cmh-chart" style="margin-top:12px">' . self::chart_compliance( $comp['series'] ) . '</div>';

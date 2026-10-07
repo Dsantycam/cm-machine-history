@@ -69,6 +69,11 @@ class CMH_Schedule {
             'auto_task_when'    => 'immediate', // 'immediate' o 'window'
             'auto_complete_task' => 1,  // cerrar la tarea al llegar su intervención
             'time_max_hours'    => 12,  // tope por tramo de trabajo del técnico
+            // v2.9.1 — Qué ve el técnico en su panel. El dinero, apagado de fábrica.
+            'tech_show_costs'      => 0, // costo, cobrado, saldo y estado de pago
+            'tech_show_indicators' => 1, // disponibilidad, averías del mes, horas programadas
+            'tech_show_pdfs'       => 1, // PDF de los formatos
+            'tech_show_detail'     => 0, // repuestos, servicios y observaciones anteriores
             'delete_data_on_uninstall' => 0, // al eliminar el plugin, NO borrar datos
             'last_run'          => '',  // 'Y-m-d H:i:s' (hora local del sitio)
             'last_summary'      => '',  // resumen legible de la última corrida
@@ -768,6 +773,21 @@ class CMH_Schedule {
             . 'Puedes corregir cualquier tramo a mano en <a href="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-time' ) ) . '">Máquinas → Equipo técnico</a>.</p>'
             . '</div>'
 
+            // v2.9.1 — Qué ve el técnico en «Mis Máquinas».
+            . '<div class="cmh-form-section">'
+            . '<p class="cmh-form-section-title">Qué ve el técnico</p>'
+            . '<p style="font-size:12px;color:#646970;margin:0 0 8px">Lo que aparece en la ficha de cada máquina dentro de «Mis Máquinas». Las tareas, el horómetro y el formulario para registrar intervenciones se ven siempre.</p>'
+            . '<label><input type="checkbox" name="tech_show_costs" value="1" ' . checked( $s['tech_show_costs'], 1, false ) . '> '
+            . '<strong>Costos y pagos</strong> <span class="cmh-optional">— costo total, cobrado, por cobrar y el estado de pago de cada intervención</span></label>'
+            . '<label><input type="checkbox" name="tech_show_indicators" value="1" ' . checked( $s['tech_show_indicators'], 1, false ) . '> '
+            . '<strong>Indicadores</strong> <span class="cmh-optional">— disponibilidad del mes, averías del mes y horas programadas</span></label>'
+            . '<label><input type="checkbox" name="tech_show_pdfs" value="1" ' . checked( $s['tech_show_pdfs'], 1, false ) . '> '
+            . '<strong>PDF de los formatos</strong> <span class="cmh-optional">— si lo apagas, tampoco puede abrirlos con un enlace directo</span></label>'
+            . '<label><input type="checkbox" name="tech_show_detail" value="1" ' . checked( $s['tech_show_detail'], 1, false ) . '> '
+            . '<strong>Detalle de intervenciones anteriores</strong> <span class="cmh-optional">— repuestos, servicios y observaciones</span></label>'
+            . '<p style="font-size:12px;color:#646970;margin:6px 0 0">Ojo: si un técnico es también administrador o cliente, en esos otros menús ve lo que corresponde a ese rol.</p>'
+            . '</div>'
+
             . '<div class="cmh-form-section">'
             . '<p class="cmh-form-section-title" style="color:#d63638">Al eliminar el plugin</p>'
             . '<label><input type="checkbox" name="delete_data_on_uninstall" value="1" ' . checked( $s['delete_data_on_uninstall'], 1, false ) . '> '
@@ -844,6 +864,10 @@ class CMH_Schedule {
             'auto_task_when'    => ( ( $_POST['auto_task_when'] ?? '' ) === 'window' ) ? 'window' : 'immediate',
             'auto_complete_task' => isset( $_POST['auto_complete_task'] ) ? 1 : 0,
             'time_max_hours'    => min( 24, max( 1, (int) ( $_POST['time_max_hours'] ?? 12 ) ) ),
+            'tech_show_costs'      => isset( $_POST['tech_show_costs'] ) ? 1 : 0,
+            'tech_show_indicators' => isset( $_POST['tech_show_indicators'] ) ? 1 : 0,
+            'tech_show_pdfs'       => isset( $_POST['tech_show_pdfs'] ) ? 1 : 0,
+            'tech_show_detail'     => isset( $_POST['tech_show_detail'] ) ? 1 : 0,
             'delete_data_on_uninstall' => isset( $_POST['delete_data_on_uninstall'] ) ? 1 : 0,
         ] );
 

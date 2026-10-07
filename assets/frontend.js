@@ -70,8 +70,12 @@
                 if (!isForm($onlyForm, formId)) return;
                 $scope = $onlyForm;
             } else {
-                $scope = $('#forminator-module-' + formId);
-                if (!$scope.length) $scope = $(document);
+                // Solo el formato que está en la página. Antes, si no se
+                // encontraba, se buscaba en TODA la página, y como los formatos
+                // comparten nombres de campo (text-12, date-1…) la configuración
+                // de un formato acababa escribiendo en los campos de otro.
+                $scope = $('#forminator-module-' + formId + ', form[data-form-id="' + formId + '"]').first();
+                if (!$scope.length) return;
             }
             if (writeMap($scope, prefill[formId])) applied = true;
         });

@@ -361,17 +361,18 @@ class CMH_Time {
 
         // ── KPIs ─────────────────────────────────────────────────────────────
         echo '<div class="cmh-grid">';
-        CMH_Admin::metric_card( 'Horas del periodo', self::format( $total ), self::hours( $total ) . ' h', 'blue' );
-        CMH_Admin::metric_card( 'Técnicos con horas', count( $techs ), 'en el periodo' );
+        // v2.9.1 — Cada cuadro baja a su detalle en esta misma pantalla.
+        CMH_Admin::metric_card( 'Horas del periodo', self::format( $total ), self::hours( $total ) . ' h', 'blue', '#cmh-horas-tecnico' );
+        CMH_Admin::metric_card( 'Técnicos con horas', count( $techs ), 'en el periodo', '', '#cmh-horas-tecnico' );
         $tasks_n = 0; foreach ( $techs as $r ) $tasks_n += (int) $r->tasks;
-        CMH_Admin::metric_card( 'Tareas trabajadas', $tasks_n, 'suma por técnico' );
-        CMH_Admin::metric_card( 'En curso ahora', count( $running ), $running ? 'relojes corriendo' : 'ninguno', $running ? 'warn' : '' );
+        CMH_Admin::metric_card( 'Tareas trabajadas', $tasks_n, 'suma por técnico', '', '#cmh-team-tasks' );
+        CMH_Admin::metric_card( 'En curso ahora', count( $running ), $running ? 'relojes corriendo' : 'ninguno', $running ? 'warn' : '', $running ? '#cmh-en-curso' : '#cmh-team-tasks' );
         echo '</div>';
 
         // ── En curso ahora ───────────────────────────────────────────────────
         if ( $running ) {
             $now = strtotime( current_time( 'mysql' ) );
-            echo '<div class="cmh-panel"><h2>En curso ahora</h2>'
+            echo '<div class="cmh-panel" id="cmh-en-curso"><h2>En curso ahora</h2>'
                 . '<p style="font-size:12px;color:#646970;margin:-6px 0 10px">Tramos abiertos: la tarea está «En progreso» y todavía no se marca como completada. '
                 . 'Estas horas aún no suman en los totales de arriba.</p>'
                 . '<table class="widefat cmh"><thead><tr><th>Técnico</th><th>Máquina</th><th>Tarea</th><th>Desde</th><th>Va corriendo</th></tr></thead><tbody>';
@@ -392,7 +393,7 @@ class CMH_Time {
         }
 
         // ── Por técnico ──────────────────────────────────────────────────────
-        echo '<div class="cmh-panel"><h2>Horas por técnico</h2>';
+        echo '<div class="cmh-panel" id="cmh-horas-tecnico"><h2>Horas por técnico</h2>';
         if ( $techs ) {
             $rows = [];
             foreach ( $techs as $r ) {
@@ -497,7 +498,7 @@ class CMH_Time {
             if ( $r->status !== 'sin_formato' && $r->due_date && $r->due_date < $today ) $late++;
         }
 
-        echo '<div class="cmh-panel"><div class="cmh-toolbar"><h2>Tareas del equipo</h2>'
+        echo '<div class="cmh-panel" id="cmh-team-tasks"><div class="cmh-toolbar"><h2>Tareas del equipo</h2>'
             . '<div class="cmh-view-switch">'
             . '<a class="button button-small' . ( $show === 'abiertas' ? ' active' : '' ) . '" href="'
             . esc_url( add_query_arg( 'tasks', 'abiertas', self::page_url( $f ) ) ) . '">Abiertas</a>'

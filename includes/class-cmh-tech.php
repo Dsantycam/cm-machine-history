@@ -159,6 +159,16 @@ class CMH_Tech {
             || self::has_task_on_machine( $machine_id, $user_id );
     }
 
+    /**
+     * v2.9.1 — ¿El panel del técnico muestra este grupo de datos? Se decide en
+     * «Máquinas → Ajustes → Qué ve el técnico».
+     *
+     * @param string $what 'costs' | 'indicators' | 'pdfs' | 'detail'
+     */
+    public static function can_see( $what ) {
+        return (bool) CMH_Schedule::setting( 'tech_show_' . $what );
+    }
+
     /** Tareas de una máquina (con nombre del técnico asignado). */
     public static function tasks_for_machine( $machine_id ) {
         global $wpdb; $t = CMH_Core::tables();
@@ -523,11 +533,28 @@ class CMH_Tech {
             . '<a class="button" href="' . esc_url( CMH_Admin::admin_url( 'cmh-tech' ) ) . '">Volver</a>'
             . '</div></div>';
 
+        // v2.9.1 — Qué cuadros ve el técnico se decide en «Máquinas → Ajustes».
         echo '<div class="cmh-grid">';
-        CMH_Admin::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ), CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc );
-        CMH_Admin::metric_card( 'Averías este mes', (int) CMH_Metrics::averia_count( $machine_id, $month, $year ), 'mes actual', 'warn' );
-        CMH_Admin::metric_card( 'Horómetro', number_format( (float) $m->current_hourmeter, 2, ',', '.' ) . ' h', 'actual', 'blue' );
-        CMH_Admin::metric_card( 'H. programadas / mes', number_format( (float) $m->scheduled_hours_monthly, 0 ) . ' h', 'base disponib.', 'blue' );
+        if ( self::can_see( 'indicators' ) ) {
+            CMH_Admin::metric_card( 'Disponibilidad ' . CMH_Metrics::month_label( $month, $year ), CMH_Metrics::fmt_pct( $avail_now ), 'mes actual', $avail_acc, '#cmh-tech-interv' );
+            CMH_Admin::metric_card( 'Averías este mes', (int) CMH_Metrics::averia_count( $machine_id, $month, $year ), 'mes actual', 'warn', '#cmh-tech-interv' );
+        }
+        CMH_Admin::metric_card( 'Horómetro', number_format( (float) $m->current_hourmeter, 2, ',', '.' ) . ' h', 'actual', 'blue', '#cmh-tech-interv' );
+        if ( self::can_see( 'indicators' ) ) {
+            CMH_Admin::metric_card( 'H. programadas / mes', number_format( (float) $m->scheduled_hours_monthly, 0 ) . ' h', 'base disponib.', 'blue' );
+        }
+        if ( self::can_see( 'costs' ) ) {
+            $money = $wpdb->get_row( $wpdb->prepare(
+                "SELECT " . CMH_Taxonomy::money_sum_sql( 'cost' ) . " costo,
+                        " . CMH_Taxonomy::money_sum_sql( 'paid_amount' ) . " pagado,
+                        " . CMH_Taxonomy::balance_sum_sql() . " por_cobrar
+                 FROM {$t['interventions']} WHERE machine_id=%d", $machine_id
+            ) );
+            CMH_Admin::metric_card( 'Costo total', CMH_Reports::money( $money->costo ), 'historial', 'blue', '#cmh-tech-interv' );
+            CMH_Admin::metric_card( 'Cobrado', CMH_Reports::money( $money->pagado ), 'historial', 'ok', '#cmh-tech-interv' );
+            CMH_Admin::metric_card( 'Por cobrar', CMH_Reports::money( $money->por_cobrar ), 'saldo pendiente',
+                (float) $money->por_cobrar > 0 ? 'warn' : 'ok', '#cmh-tech-interv' );
+        }
         echo '</div>';
 
         echo '<div class="cmh-layout"><div class="cmh-main">';
@@ -538,7 +565,7 @@ class CMH_Tech {
         echo '</div>';
 
         // Últimas intervenciones (solo lectura)
-        echo '<div class="cmh-panel"><h2>Últimas intervenciones</h2>';
+        echo '<div class="cmh-panel" id="cmh-tech-interv"><h2>Últimas intervenciones</h2>';
         self::render_readonly_interventions( $machine_id );
         echo '</div>';
 
@@ -618,17 +645,37 @@ class CMH_Tech {
             echo '<p style="color:#646970;font-size:13px;margin:0">Aún no hay intervenciones. Registra la primera en el formulario de la derecha.</p>';
             return;
         }
-        echo '<table class="widefat cmh"><thead><tr><th>Fecha</th><th>Tipo</th><th>Técnico</th><th>H. parada</th><th>PDF</th></tr></thead><tbody>';
+        // v2.9.1 — Las columnas opcionales dependen de «Qué ve el técnico».
+        $costs  = self::can_see( 'costs' );
+        $pdfs   = self::can_see( 'pdfs' );
+        $detail = self::can_see( 'detail' );
+
+        echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr><th>Fecha</th><th>Tipo</th><th>Técnico</th><th>H. parada</th>'
+            . ( $detail ? '<th>Detalle</th>' : '' )
+            . ( $costs ? '<th>Costo</th><th>Pago</th>' : '' )
+            . ( $pdfs ? '<th>PDF</th>' : '' )
+            . '</tr></thead><tbody>';
         foreach ( $rows as $r ) {
+            $det = [];
+            if ( $detail ) {
+                if ( $r->parts )        $det[] = '<strong>Repuestos:</strong> ' . esc_html( wp_trim_words( $r->parts, 25 ) );
+                if ( $r->services )     $det[] = '<strong>Servicios:</strong> ' . esc_html( wp_trim_words( $r->services, 25 ) );
+                if ( $r->observations ) $det[] = '<strong>Observaciones:</strong> ' . esc_html( wp_trim_words( $r->observations, 25 ) );
+            }
             echo '<tr>'
                 . '<td>' . esc_html( $r->intervention_date ) . '</td>'
                 . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' ) . '</td>'
                 . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
                 . '<td>' . esc_html( $r->downtime_hours ) . ' h</td>'
-                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>'
+                . ( $detail ? '<td style="font-size:12px">' . ( $det ? implode( '<br>', $det ) : '—' ) . '</td>' : '' )
+                . ( $costs
+                    ? '<td>' . ( (float) $r->cost > 0 ? esc_html( CMH_Reports::money( $r->cost ) ) : '—' ) . '</td>'
+                      . '<td>' . ( CMH_Admin::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) ?: '—' ) . '</td>'
+                    : '' )
+                . ( $pdfs ? '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>' : '' )
                 . '</tr>';
         }
-        echo '</tbody></table>';
+        echo '</tbody></table></div>';
     }
 
     /** Formulario de intervención simplificado para el técnico. */
