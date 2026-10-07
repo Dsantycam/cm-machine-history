@@ -319,6 +319,52 @@ class CMH_Admin {
     }
 
     /**
+     * v2.9.1 — Cuadros rápidos de una empresa o sucursal, con el mismo diseño y
+     * los mismos enlaces que la ficha de la máquina: cada uno abre la lista de
+     * intervenciones ya filtrada por ese alcance.
+     *
+     * @param array $scope [ 'company_id' => id ] o [ 'city_id' => id ].
+     */
+    public static function scope_cards( $scope ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $scope = array_filter( array_map( 'intval', array_intersect_key( (array) $scope, [ 'company_id' => 1, 'city_id' => 1 ] ) ) );
+        if ( ! $scope ) return;
+
+        $col = isset( $scope['city_id'] ) ? 'm.city_id' : 'm.company_id';
+        $s = $wpdb->get_row( $wpdb->prepare(
+            "SELECT COUNT(*) total,
+                    " . CMH_Taxonomy::money_sum_sql( 'cost', 'i.' ) . " cost,
+                    " . CMH_Taxonomy::money_sum_sql( 'paid_amount', 'i.' ) . " pagado,
+                    " . CMH_Taxonomy::balance_sum_sql( 'i.' ) . " por_cobrar,
+                    " . CMH_Taxonomy::quote_sum_sql( 'i.' ) . " en_tramite,
+                    COALESCE(SUM(i.maintenance_type='preventivo'),0) preventivos,
+                    COALESCE(SUM(i.affects_availability=1),0) averias,
+                    COALESCE(SUM(CASE WHEN i.affects_availability=1 THEN i.downtime_hours ELSE 0 END),0) dt
+             FROM {$t['interventions']} i
+             JOIN {$t['machines']} m ON m.id = i.machine_id
+             WHERE $col = %d",
+            (int) reset( $scope )
+        ) );
+        $u = function ( $args = [] ) use ( $scope ) { return self::interv_url( array_merge( $scope, $args ) ); };
+
+        echo '<div class="cmh-grid-primary">';
+        self::metric_card( 'Intervenciones', (int) $s->total, 'historial completo', 'blue', $u() );
+        self::metric_card( 'Por cobrar', '$' . number_format( (float) $s->por_cobrar, 0, ',', '.' ),
+            'saldo pendiente', (float) $s->por_cobrar > 0 ? 'warn' : 'ok', $u( [ 'pay' => 'pending' ] ) );
+        self::metric_card( 'Costo total', '$' . number_format( (float) $s->cost, 0, ',', '.' ), 'historial completo', 'blue', $u() );
+        self::metric_card( 'Averías', (int) $s->averias, 'descuentan disponibilidad', 'danger', $u( [ 'affects' => 1 ] ) );
+        echo '</div><div class="cmh-stats-strip">';
+        self::stat_item( 'Preventivos', (int) $s->preventivos, $u( [ 'type' => 'preventivo' ] ) );
+        self::stat_item( 'Cobrado', '$' . number_format( (float) $s->pagado, 0, ',', '.' ), $u( [ 'pay' => 'paid' ] ) );
+        self::stat_item( 'H. parada averías', number_format( (float) $s->dt, 1, ',', '.' ) . ' h', $u( [ 'affects' => 1 ] ) );
+        if ( CMH_Taxonomy::quote_pstates() ) {
+            self::stat_item( 'En trámite', '$' . number_format( (float) $s->en_tramite, 0, ',', '.' ), $u( [ 'pay' => 'quote' ] ) );
+        }
+        self::stat_item( 'Indicadores', 'Ver reporte', self::admin_url( CMH_SLUG . '-reports', $scope ) );
+        echo '</div>';
+    }
+
+    /**
      * Indicador secundario de la franja compacta (v2.4). Mismo dato, menos peso
      * visual: lo que se consulta de vez en cuando no tiene por qué competir con
      * lo que se mira todos los días.
@@ -404,9 +450,10 @@ class CMH_Admin {
         self::stat_item( 'Máquinas',       $machines,    self::admin_url( CMH_SLUG . '-machines' ) );
         self::stat_item( 'Preventivos',    $preventivos, self::interv_url( [ 'type' => 'preventivo' ] ) );
         self::stat_item( 'Correctivos/Averías', $correctivos, self::interv_url( [ 'affects' => 1 ] ) );
-        self::stat_item( 'MTTR ' . $month_label, CMH_Metrics::fmt_mttr( $fleet_mttr ), self::interv_url( [ 'affects' => 1 ] ) );
-        self::stat_item( 'MTBF flota',     CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( 0, 12 ) ) );
-        self::stat_item( 'Horas parada ' . $month_label, number_format( $month_dt, 1, ',', '.' ) . ' h', self::interv_url( [ 'affects' => 1 ] ) );
+        $este_mes = sprintf( '%04d-%02d', $year, $month );
+        self::stat_item( 'MTTR ' . $month_label, CMH_Metrics::fmt_mttr( $fleet_mttr ), self::interv_url( [ 'affects' => 1, 'from' => $este_mes, 'to' => $este_mes ] ) );
+        self::stat_item( 'MTBF flota',     CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( 0, 12 ) ), self::interv_url( [ 'affects' => 1 ] ) );
+        self::stat_item( 'Horas parada ' . $month_label, number_format( $month_dt, 1, ',', '.' ) . ' h', self::interv_url( [ 'affects' => 1, 'from' => $este_mes, 'to' => $este_mes ] ) );
         // Solo aparece si hay estados marcados «En trámite»: a quien no cotiza
         // no se le mete un indicador en cero que no significa nada.
         if ( CMH_Taxonomy::quote_pstates() ) {
@@ -605,6 +652,8 @@ class CMH_Admin {
             . '</form>'
             . '</div></div>';
 
+        self::scope_cards( [ 'company_id' => $company_id ] );
+
         echo '<div class="cmh-panel">'
             . '<div class="cmh-toolbar"><h2>Ciudades / Sucursales</h2>'
             . '<button type="button" class="button button-primary cmh-open-modal" data-target="cmh-box-sucursal" '
@@ -705,6 +754,8 @@ class CMH_Admin {
             . '<button type="button" class="cmh-open-modal" data-target="cmh-box-borrar-ciudad" '
             . 'data-title="Eliminar la sucursal ' . esc_attr( $city->name ) . '" style="color:#d63638">Eliminar sucursal</button>'
             . '</div></div></div></div>';
+
+        self::scope_cards( [ 'city_id' => $city_id ] );
 
         echo '<div class="cmh-panel"><h2>Máquinas en ' . esc_html( $city->name ) . '</h2>';
         self::machines_table( $city_id, 0 );
@@ -930,9 +981,10 @@ class CMH_Admin {
             self::stat_item( 'En trámite', '$' . number_format( (float) $stats->en_tramite, 0, ',', '.' ),
                 $mu( [ 'pay' => 'quote' ] ) );
         }
-        self::stat_item( 'MTTR',            CMH_Metrics::fmt_mttr( $mttr_all ) );
-        self::stat_item( 'MTBF',            CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( $machine_id, 12 ) ) );
-        self::stat_item( 'Horómetro',       number_format( (float) $m->current_hourmeter, 1, ',', '.' ) . ' h' );
+        self::stat_item( 'MTTR',            CMH_Metrics::fmt_mttr( $mttr_all ), $mu( [ 'affects' => 1 ] ) );
+        self::stat_item( 'MTBF',            CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( $machine_id, 12 ) ), $mu( [ 'affects' => 1 ] ) );
+        // El horómetro se lee en cada intervención: lleva a la lista de la máquina.
+        self::stat_item( 'Horómetro',       number_format( (float) $m->current_hourmeter, 1, ',', '.' ) . ' h', $mu() );
         echo '</div>';
 
 
@@ -1381,20 +1433,36 @@ class CMH_Admin {
         if ( $type !== '' && ! isset( CMH_Taxonomy::mtypes()[ $type ] ) ) $type = '';
 
         $pay = sanitize_key( $_GET['pay'] ?? '' );
-        if ( ! in_array( $pay, [ '', 'pending', 'paid', 'void' ], true ) ) $pay = '';
+        // v2.9.1 — «quote» faltaba: el cuadro «En trámite» del dashboard llevaba
+        // a la lista sin filtro, porque el valor se descartaba aquí.
+        if ( ! in_array( $pay, [ '', 'pending', 'paid', 'void', 'quote' ], true ) ) $pay = '';
 
         $state = sanitize_key( $_GET['state'] ?? '' );
         if ( $state !== '' && ! isset( CMH_Taxonomy::pstates()[ $state ] ) ) $state = '';
 
-        return [
+        $f = [
             'type'       => $type,
             'pay'        => $pay,
             'state'      => $state,
             'affects'    => ( ( $_GET['affects'] ?? '' ) === '1' ) ? 1 : 0,
             'company_id' => intval( $_GET['company_id'] ?? 0 ),
+            // v2.9.1 — Sucursal, marca y periodo: los cuadros de Reportes llevan
+            // aquí con el mismo alcance que se estaba mirando.
+            'city_id'    => intval( $_GET['city_id'] ?? 0 ),
+            'brand'      => sanitize_text_field( wp_unslash( $_GET['brand'] ?? '' ) ),
             'machine_id' => intval( $_GET['machine_id'] ?? 0 ),
+            'from'       => self::month_param( $_GET['from'] ?? '' ),
+            'to'         => self::month_param( $_GET['to'] ?? '' ),
             'q'          => sanitize_text_field( $_GET['q'] ?? '' ),
         ];
+        if ( $f['from'] && $f['to'] && $f['from'] > $f['to'] ) { $x = $f['from']; $f['from'] = $f['to']; $f['to'] = $x; }
+        return $f;
+    }
+
+    /** v2.9.1 — Mes «AAAA-MM» válido, o ''. */
+    public static function month_param( $v ) {
+        $v = sanitize_text_field( (string) $v );
+        return preg_match( '/^\d{4}-(0[1-9]|1[0-2])$/', $v ) ? $v : '';
     }
 
     /** URL de la lista con un filtro puesto. Lo usan las tarjetas del dashboard. */
@@ -1411,6 +1479,10 @@ class CMH_Admin {
         if ( $f['affects'] )    $w[] = 'i.affects_availability=1';
         if ( $f['company_id'] ) $w[] = $wpdb->prepare( 'm.company_id=%d', $f['company_id'] );
         if ( $f['machine_id'] ) $w[] = $wpdb->prepare( 'i.machine_id=%d', $f['machine_id'] );
+        if ( ! empty( $f['city_id'] ) ) $w[] = $wpdb->prepare( 'm.city_id=%d', $f['city_id'] );
+        if ( ! empty( $f['brand'] ) )   $w[] = $wpdb->prepare( 'm.brand=%s', $f['brand'] );
+        if ( ! empty( $f['from'] ) )    $w[] = $wpdb->prepare( 'i.intervention_date >= %s', $f['from'] . '-01' );
+        if ( ! empty( $f['to'] ) )      $w[] = $wpdb->prepare( 'i.intervention_date <= %s', date( 'Y-m-t', strtotime( $f['to'] . '-01' ) ) );
         if ( $f['q'] !== '' )   $w[] = $wpdb->prepare( '(m.machine_code LIKE %s OR i.technician LIKE %s)',
                                     '%' . $wpdb->esc_like( $f['q'] ) . '%', '%' . $wpdb->esc_like( $f['q'] ) . '%' );
 
@@ -1462,14 +1534,16 @@ class CMH_Admin {
         );
 
         // ── Resumen de lo filtrado ───────────────────────────────────────────
+        // v2.9.1 — Cada cuadro afina la lista: mismo alcance, otro corte de dinero.
+        $sin_pago = array_merge( $f, [ 'pay' => '', 'state' => '' ] );
         echo '<div class="cmh-grid">';
-        self::metric_card( 'Intervenciones', intval( $totals->n ?? 0 ), 'con este filtro', 'blue' );
-        self::metric_card( 'Costo', '$' . number_format( (float) ( $totals->cost ?? 0 ), 0, ',', '.' ), 'suma del filtro', 'blue' );
+        self::metric_card( 'Intervenciones', intval( $totals->n ?? 0 ), 'con este filtro', 'blue', self::interv_url( $sin_pago ) );
+        self::metric_card( 'Costo', '$' . number_format( (float) ( $totals->cost ?? 0 ), 0, ',', '.' ), 'suma del filtro', 'blue', self::interv_url( $sin_pago ) );
         self::metric_card( 'Por cobrar', '$' . number_format( (float) ( $totals->saldo ?? 0 ), 0, ',', '.' ),
-            'saldo del filtro', ( (float) ( $totals->saldo ?? 0 ) ) > 0 ? 'warn' : 'ok' );
+            'saldo del filtro', ( (float) ( $totals->saldo ?? 0 ) ) > 0 ? 'warn' : 'ok', self::interv_url( array_merge( $sin_pago, [ 'pay' => 'pending' ] ) ) );
         if ( CMH_Taxonomy::quote_pstates() ) {
             self::metric_card( 'En trámite', '$' . number_format( (float) ( $totals->en_tramite ?? 0 ), 0, ',', '.' ),
-                'cotizado, sin aprobar', 'blue' );
+                'cotizado, sin aprobar', 'blue', self::interv_url( array_merge( $sin_pago, [ 'pay' => 'quote' ] ) ) );
         }
         echo '</div>';
 
@@ -1564,10 +1638,14 @@ class CMH_Admin {
         foreach ( $companies as $c )
             echo '<option value="' . intval( $c->id ) . '" ' . selected( $f['company_id'], $c->id, false ) . '>' . esc_html( $c->name ) . '</option>';
         echo '</select></label>'
+            . '<label>Desde<input type="month" name="from" value="' . esc_attr( $f['from'] ) . '"></label>'
+            . '<label>Hasta<input type="month" name="to" value="' . esc_attr( $f['to'] ) . '"></label>'
             . '</div>';
 
         if ( $f['affects'] ) echo '<input type="hidden" name="affects" value="1">';
         if ( $f['machine_id'] ) echo '<input type="hidden" name="machine_id" value="' . intval( $f['machine_id'] ) . '">';
+        if ( $f['city_id'] ) echo '<input type="hidden" name="city_id" value="' . intval( $f['city_id'] ) . '">';
+        if ( $f['brand'] !== '' ) echo '<input type="hidden" name="brand" value="' . esc_attr( $f['brand'] ) . '">';
 
         echo '<div class="cmh-form-actions">'
             . '<button class="button button-primary">Aplicar</button>'
@@ -2530,11 +2608,11 @@ class CMH_Admin {
      * archivo concreto. Todos los botones «Ver» / «Ver PDF» usan esto.
      */
     public static function file_link( $intervention_id = 0, $file_id = 0 ) {
-        return admin_url( 'admin-post.php?' . http_build_query( array_filter( [
+        return wp_nonce_url( admin_url( 'admin-post.php?' . http_build_query( array_filter( [
             'action'          => 'cmh_file',
             'intervention_id' => (int) $intervention_id,
             'file_id'         => (int) $file_id,
-        ] ) ) );
+        ] ) ) ), 'cmh_file' );
     }
 
     /**
@@ -2550,6 +2628,7 @@ class CMH_Admin {
      */
     public static function serve_file() {
         if ( ! is_user_logged_in() ) wp_die( 'Sin permisos.' );
+        check_admin_referer( 'cmh_file' );
         global $wpdb; $t = CMH_Core::tables();
 
         $file_id = intval( $_GET['file_id'] ?? 0 );
@@ -2560,6 +2639,14 @@ class CMH_Admin {
         if ( ! $f ) wp_die( 'Archivo no encontrado.', 'Archivo', [ 'response' => 404, 'back_link' => true ] );
 
         if ( ! self::can_see_machine( (int) $f->machine_id ) ) wp_die( 'No tienes acceso a este archivo.', 'Archivo', [ 'response' => 403, 'back_link' => true ] );
+
+        // v2.9.1 — Si en Ajustes se ocultaron los PDF al técnico, quien llega
+        // solo como técnico tampoco los abre con el enlace directo.
+        $by_other_role = current_user_can( 'edit_others_posts' )
+            || ( current_user_can( 'cmh_client' ) && CMH_Client::can_access_machine( (int) $f->machine_id ) );
+        if ( ! $by_other_role && ! CMH_Tech::can_see( 'pdfs' ) ) {
+            wp_die( 'Los archivos no están disponibles en el panel del técnico.', 'Archivo', [ 'response' => 403, 'back_link' => true ] );
+        }
 
         $path = self::file_disk_path( $f );
 
