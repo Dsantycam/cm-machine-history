@@ -7,6 +7,14 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class CMH_Admin {
 
+    /**
+     * v2.9.2 — Tipo agrupado del filtro de intervenciones: correctivos y averías
+     * juntos, lo mismo que cuenta el indicador «Correctivos/Averías». Antes ese
+     * indicador enlazaba a «afecta disponibilidad», que solo marcan las averías:
+     * una máquina con 4 correctivos mostraba 4 y su lista salía vacía.
+     */
+    const TYPE_CORRECTIVOS = 'correctivos';
+
     // =========================================================================
     // Init
     // =========================================================================
@@ -449,7 +457,7 @@ class CMH_Admin {
         echo '<div class="cmh-stats-strip">';
         self::stat_item( 'Máquinas',       $machines,    self::admin_url( CMH_SLUG . '-machines' ) );
         self::stat_item( 'Preventivos',    $preventivos, self::interv_url( [ 'type' => 'preventivo' ] ) );
-        self::stat_item( 'Correctivos/Averías', $correctivos, self::interv_url( [ 'affects' => 1 ] ) );
+        self::stat_item( 'Correctivos/Averías', $correctivos, self::interv_url( [ 'type' => self::TYPE_CORRECTIVOS ] ) );
         $este_mes = sprintf( '%04d-%02d', $year, $month );
         self::stat_item( 'MTTR ' . $month_label, CMH_Metrics::fmt_mttr( $fleet_mttr ), self::interv_url( [ 'affects' => 1, 'from' => $este_mes, 'to' => $este_mes ] ) );
         self::stat_item( 'MTBF flota',     CMH_Metrics::fmt_mttr( CMH_Metrics::mtbf( 0, 12 ) ), self::interv_url( [ 'affects' => 1 ] ) );
@@ -975,7 +983,7 @@ class CMH_Admin {
 
         echo '<div class="cmh-stats-strip">';
         self::stat_item( 'Preventivos',      (int) $stats->preventivos, $mu( [ 'type' => 'preventivo' ] ) );
-        self::stat_item( 'Correctivos/Averías', (int) $stats->correctivos, $mu( [ 'affects' => 1 ] ) );
+        self::stat_item( 'Correctivos/Averías', (int) $stats->correctivos, $mu( [ 'type' => self::TYPE_CORRECTIVOS ] ) );
         self::stat_item( 'H. parada averías', number_format( (float) $stats->downtime_averia, 1, ',', '.' ) . ' h', $mu( [ 'affects' => 1 ] ) );
         if ( CMH_Taxonomy::quote_pstates() ) {
             self::stat_item( 'En trámite', '$' . number_format( (float) $stats->en_tramite, 0, ',', '.' ),
@@ -1430,7 +1438,7 @@ class CMH_Admin {
     /** Filtros de la lista de intervenciones, saneados. */
     public static function interv_filters() {
         $type = sanitize_key( $_GET['type'] ?? '' );
-        if ( $type !== '' && ! isset( CMH_Taxonomy::mtypes()[ $type ] ) ) $type = '';
+        if ( $type !== '' && $type !== self::TYPE_CORRECTIVOS && ! isset( CMH_Taxonomy::mtypes()[ $type ] ) ) $type = '';
 
         $pay = sanitize_key( $_GET['pay'] ?? '' );
         // v2.9.1 — «quote» faltaba: el cuadro «En trámite» del dashboard llevaba
@@ -1474,7 +1482,11 @@ class CMH_Admin {
     public static function interv_where( $f ) {
         global $wpdb;
         $w = [];
-        if ( $f['type'] )       $w[] = $wpdb->prepare( 'i.maintenance_type=%s', $f['type'] );
+        if ( $f['type'] === self::TYPE_CORRECTIVOS ) {
+            $w[] = "i.maintenance_type IN('correctivo','averia')";
+        } elseif ( $f['type'] ) {
+            $w[] = $wpdb->prepare( 'i.maintenance_type=%s', $f['type'] );
+        }
         if ( $f['state'] )      $w[] = $wpdb->prepare( 'i.payment_status=%s', $f['state'] );
         if ( $f['affects'] )    $w[] = 'i.affects_availability=1';
         if ( $f['company_id'] ) $w[] = $wpdb->prepare( 'm.company_id=%d', $f['company_id'] );
@@ -1620,6 +1632,7 @@ class CMH_Admin {
             . '<label>Tipo<select name="type"><option value="">— Todos —</option>';
         foreach ( CMH_Taxonomy::mtype_labels() as $k => $v )
             echo '<option value="' . esc_attr( $k ) . '" ' . selected( $f['type'], $k, false ) . '>' . esc_html( $v ) . '</option>';
+        echo '<option value="' . esc_attr( self::TYPE_CORRECTIVOS ) . '" ' . selected( $f['type'], self::TYPE_CORRECTIVOS, false ) . '>Correctivo + Avería</option>';
         echo '</select></label>'
             . '<label>Estado de pago<select name="state"><option value="">— Todos —</option>';
         foreach ( CMH_Taxonomy::pstate_labels() as $k => $v )

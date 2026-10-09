@@ -474,8 +474,8 @@
     var SCREEN_PARAMS = ['page', 'id', 'machine_id', 'company_id', 'city_id', 'branch_id', 'tech_id'];
     var IGNORED       = ['cmh_msg', 'cmh_warn', 'cmh_restored', 'paged', '_wpnonce', '_wp_http_referer', 'action', 'noheader'];
 
-    function queryPairs() {
-        var out = [], raw = window.location.search.replace(/^\?/, '');
+    function queryPairs(search) {
+        var out = [], raw = (search === undefined ? window.location.search : search).replace(/^\?/, '');
         if (!raw) return out;
         raw.split('&').forEach(function (chunk) {
             if (!chunk) return;
@@ -487,10 +487,10 @@
     function joinPairs(pairs) {
         return pairs.map(function (p) { return p[0] + '=' + p[1]; }).join('&');
     }
-    function screenPairs() {
-        return queryPairs().filter(function (p) { return SCREEN_PARAMS.indexOf(p[0]) >= 0; });
+    function screenPairs(search) {
+        return queryPairs(search).filter(function (p) { return SCREEN_PARAMS.indexOf(p[0]) >= 0; });
     }
-    function filterKey()  { return 'cmh:filters:' + joinPairs(screenPairs()); }
+    function filterKey(search) { return 'cmh:filters:' + joinPairs(screenPairs(search)); }
     function filterQuery() {
         return joinPairs(queryPairs().filter(function (p) {
             return SCREEN_PARAMS.indexOf(p[0]) < 0 && IGNORED.indexOf(p[0]) < 0 && p[1] !== '';
@@ -514,6 +514,16 @@
             if ($.trim(String(f.value)) !== '') vacio = false;
         });
         if (vacio) forget(filterKey());
+    });
+
+    // v2.9.2 — Un cuadro o indicador lleva a una lista con un filtro EXACTO:
+    // el que nombra su enlace, y nada más. Sin esto, el cuadro «Intervenciones»
+    // de una máquina caía en la lista con el último filtro usado (p. ej. solo
+    // averías) y mostraba «Nada con estos filtros» aunque hubiera seis.
+    $(document).on('click', 'a.cmh-card-link, a.cmh-stat, .cmh-empty-actions a', function () {
+        var a = this;
+        if (a.pathname !== window.location.pathname) return;
+        forget(filterKey(a.search));
     });
 
     $(document).on('click', '.cmh-clear-filters', function (e) {
