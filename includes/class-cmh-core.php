@@ -519,6 +519,9 @@ class CMH_Core {
             self::activate();
             delete_option( 'cmh_machine_history_version' );
 
+            // v2.10.1 — La carpeta de PDF deja de servirse directo por URL.
+            if ( class_exists( 'CMH_Integration' ) ) CMH_Integration::protect_storage();
+
             // v2.9 — Las máquinas cuya tarea de mantenimiento ya estaba cerrada
             // dejan de figurar como vencidas. Corre una sola vez, al subir.
             if ( $installed && version_compare( $installed, '2.9.0', '<' ) && class_exists( 'CMH_Schedule' ) ) {
