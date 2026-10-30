@@ -239,6 +239,89 @@ class CMH_Time {
     }
 
     // =========================================================================
+    // v2.10 — Tiempo estimado y horas extra
+    // =========================================================================
+
+    /*
+     * Cada tarea puede llevar un tiempo estimado (`tasks.estimated_hours`). Las
+     * horas extra son lo que el reloj midió POR ENCIMA de esa estimación:
+     * max( 0, medido − estimado ). Sin estimación no hay extra que calcular.
+     * Se mide contra el total de la tarea (todos sus tramos), sea quien sea
+     * quien los trabajó; en los totales por técnico el extra se le cuenta al
+     * técnico asignado a la tarea.
+     */
+
+    /** Lee el estimado de un formulario («1.5» o «1,5» horas). null si viene vacío o en cero. */
+    public static function estimate_from_post( $name = 'estimated_hours' ) {
+        $raw = str_replace( ',', '.', trim( (string) ( $_POST[ $name ] ?? '' ) ) );
+        $h   = round( (float) $raw, 2 );
+        return $h > 0 ? min( $h, 9999 ) : null;
+    }
+
+    /** Segundos estimados de una tarea (0 = sin estimación). */
+    public static function estimate_seconds( $task ) {
+        return (int) round( (float) ( $task->estimated_hours ?? 0 ) * 3600 );
+    }
+
+    /** Segundos por encima de lo estimado. 0 si no se pasó o no hay estimación. */
+    public static function extra_seconds( $worked_secs, $task ) {
+        $est = self::estimate_seconds( $task );
+        return $est > 0 ? max( 0, (int) $worked_secs - $est ) : 0;
+    }
+
+    /** «1 h 30 min» del estimado, o '' si la tarea no tiene. */
+    public static function estimate_label( $task ) {
+        $est = self::estimate_seconds( $task );
+        return $est > 0 ? self::format( $est ) : '';
+    }
+
+    /**
+     * Celda «Horas» de las tablas de tareas: medido, estimado y, si se pasó,
+     * las horas extra en rojo. $running marca que hay un reloj abierto.
+     */
+    public static function hours_cell( $task, $worked_secs, $running = false ) {
+        $out = $running ? '<span class="cmh-badge" style="background:#e7f0fb;color:#1c4d80">En curso</span> ' : '';
+        $out .= esc_html( $worked_secs ? self::format( $worked_secs ) : '—' );
+        $est = self::estimate_label( $task );
+        if ( $est ) $out .= ' <span class="cmh-muted">/ est. ' . esc_html( $est ) . '</span>';
+        $extra = self::extra_seconds( $worked_secs, $task );
+        if ( $extra ) {
+            $out .= '<br><span class="cmh-badge cmh-badge-xs" style="background:#fce8e8;color:#d63638">+'
+                . esc_html( self::format( $extra ) ) . ' extra</span>';
+        }
+        return $out;
+    }
+
+    /**
+     * Horas extra de las tareas trabajadas en el periodo filtrado, por técnico
+     * asignado: [ 'total' => segs, 'by_user' => [ user_id => segs ], 'tasks' => n ].
+     * Cada tarea se mide con TODOS sus tramos, no solo los del periodo: el extra
+     * es de la tarea entera, y partirlo por fechas lo haría aparecer o no según
+     * el filtro.
+     */
+    private static function extra_summary( $f ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $rows = $wpdb->get_results(
+            "SELECT x.id, x.assigned_to, x.estimated_hours, SUM(s.seconds) AS secs
+             FROM {$t['tasks']} x
+             JOIN " . self::table() . " s ON s.task_id = x.id AND s.ended_at IS NOT NULL
+             WHERE x.estimated_hours > 0
+               AND x.id IN ( SELECT DISTINCT tt.task_id FROM " . self::from_sql() . " WHERE " . self::where( $f ) . " )
+             GROUP BY x.id, x.assigned_to, x.estimated_hours"
+        );
+        $out = [ 'total' => 0, 'by_user' => [], 'tasks' => 0 ];
+        foreach ( $rows as $r ) {
+            $extra = self::extra_seconds( (int) $r->secs, $r );
+            if ( ! $extra ) continue;
+            $uid = (int) $r->assigned_to;
+            $out['total'] += $extra;
+            $out['tasks']++;
+            $out['by_user'][ $uid ] = ( $out['by_user'][ $uid ] ?? 0 ) + $extra;
+        }
+        return $out;
+    }
+
+    // =========================================================================
     // Filtros de la pantalla
     // =========================================================================
 
@@ -354,10 +437,11 @@ class CMH_Time {
         $total = 0; foreach ( $techs as $r ) $total += (int) $r->secs;
 
         $running = $wpdb->get_results(
-            "SELECT tt.*, m.machine_code, ta.title AS task_title
+            "SELECT tt.*, m.machine_code, ta.title AS task_title, ta.estimated_hours
              FROM " . self::from_sql() . " WHERE tt.ended_at IS NULL
              ORDER BY tt.started_at ASC"
         );
+        $extra = self::extra_summary( $f );
 
         // ── KPIs ─────────────────────────────────────────────────────────────
         echo '<div class="cmh-grid">';
@@ -367,6 +451,10 @@ class CMH_Time {
         $tasks_n = 0; foreach ( $techs as $r ) $tasks_n += (int) $r->tasks;
         CMH_Admin::metric_card( 'Tareas trabajadas', $tasks_n, 'suma por técnico', '', '#cmh-team-tasks' );
         CMH_Admin::metric_card( 'En curso ahora', count( $running ), $running ? 'relojes corriendo' : 'ninguno', $running ? 'warn' : '', $running ? '#cmh-en-curso' : '#cmh-team-tasks' );
+        // v2.10 — Lo trabajado por encima del tiempo estimado de cada tarea.
+        CMH_Admin::metric_card( 'Horas extra', $extra['total'] ? self::format( $extra['total'] ) : '0 h',
+            $extra['tasks'] ? 'sobre lo estimado · ' . intval( $extra['tasks'] ) . ' tarea(s)' : 'sobre lo estimado',
+            $extra['total'] ? 'danger' : 'ok', '#cmh-horas-tecnico' );
         echo '</div>';
 
         // ── En curso ahora ───────────────────────────────────────────────────
@@ -375,10 +463,15 @@ class CMH_Time {
             echo '<div class="cmh-panel" id="cmh-en-curso"><h2>En curso ahora</h2>'
                 . '<p style="font-size:12px;color:#646970;margin:-6px 0 10px">Tramos abiertos: la tarea está «En progreso» y todavía no se marca como completada. '
                 . 'Estas horas aún no suman en los totales de arriba.</p>'
-                . '<table class="widefat cmh"><thead><tr><th>Técnico</th><th>Máquina</th><th>Tarea</th><th>Desde</th><th>Va corriendo</th></tr></thead><tbody>';
+                . '<table class="widefat cmh"><thead><tr><th>Técnico</th><th>Máquina</th><th>Tarea</th><th>Desde</th><th>Va corriendo</th><th>Estimado</th></tr></thead><tbody>';
+            // v2.10 — Lo ya cerrado de cada tarea, para comparar el total con el estimado.
+            $closed = self::seconds_by_task( wp_list_pluck( $running, 'task_id' ) );
             foreach ( $running as $r ) {
                 $elapsed = max( 0, $now - strtotime( $r->started_at ) );
                 $over    = $elapsed > self::max_seconds();
+                $so_far  = $elapsed + ( $closed[ (int) $r->task_id ] ?? 0 );
+                $extra_r = self::extra_seconds( $so_far, $r );
+                $est     = self::estimate_label( $r );
                 echo '<tr>'
                     . '<td>' . esc_html( self::user_name( $r->user_id ) ) . '</td>'
                     . '<td>' . esc_html( $r->machine_code ?: '—' ) . '</td>'
@@ -387,6 +480,8 @@ class CMH_Time {
                     . '<td>' . ( $over
                         ? '<span class="cmh-badge" style="background:#fce8e8;color:#d63638">' . esc_html( self::format( $elapsed ) ) . ' — pasa del tope</span>'
                         : esc_html( self::format( $elapsed ) ) ) . '</td>'
+                    . '<td>' . ( $est ? esc_html( $est ) : '<span class="cmh-muted">—</span>' )
+                    . ( $extra_r ? '<br><span class="cmh-badge cmh-badge-xs" style="background:#fce8e8;color:#d63638">ya va +' . esc_html( self::format( $extra_r ) ) . '</span>' : '' ) . '</td>'
                     . '</tr>';
             }
             echo '</tbody></table></div>';
@@ -409,10 +504,11 @@ class CMH_Time {
             echo CMH_Charts::hbars( $rows, [ 'label' => 'Horas trabajadas por técnico' ] );
 
             echo '<table class="widefat cmh" style="margin-top:14px"><thead><tr>'
-                . '<th>Técnico</th><th>Horas</th><th>Decimal</th><th>Tareas</th><th>Máquinas</th><th>Tramos</th><th>Promedio/tarea</th>'
+                . '<th>Técnico</th><th>Horas</th><th>Decimal</th><th>Tareas</th><th>Máquinas</th><th>Tramos</th><th>Promedio/tarea</th><th>Extra</th>'
                 . '</tr></thead><tbody>';
             foreach ( $techs as $r ) {
                 $avg = (int) $r->tasks ? (int) round( $r->secs / (int) $r->tasks ) : 0;
+                $ex  = $extra['by_user'][ (int) $r->user_id ] ?? 0;
                 echo '<tr>'
                     . '<td><strong>' . esc_html( self::user_name( $r->user_id ) ) . '</strong></td>'
                     . '<td>' . esc_html( self::format( $r->secs ) ) . '</td>'
@@ -421,11 +517,15 @@ class CMH_Time {
                     . '<td>' . intval( $r->machines ) . '</td>'
                     . '<td>' . intval( $r->segments ) . '</td>'
                     . '<td>' . esc_html( self::format( $avg ) ) . '</td>'
+                    . '<td>' . ( $ex ? '<span style="color:#d63638;font-weight:600">+' . esc_html( self::format( $ex ) ) . '</span>' : '<span class="cmh-muted">—</span>' ) . '</td>'
                     . '</tr>';
             }
             echo '<tr style="background:#f6f7f7;font-weight:700"><td>Total</td><td>' . esc_html( self::format( $total ) ) . '</td>'
-                . '<td>' . esc_html( number_format_i18n( self::hours( $total ), 2 ) ) . '</td><td colspan="4"></td></tr>';
-            echo '</tbody></table>';
+                . '<td>' . esc_html( number_format_i18n( self::hours( $total ), 2 ) ) . '</td><td colspan="4"></td>'
+                . '<td>' . ( $extra['total'] ? '+' . esc_html( self::format( $extra['total'] ) ) : '—' ) . '</td></tr>';
+            echo '</tbody></table>'
+                . '<p class="cmh-hint" style="margin-top:8px">«Extra» = lo que el reloj midió por encima del tiempo estimado de cada tarea trabajada en el periodo, '
+                . 'contando todos los tramos de la tarea. Se le suma al técnico asignado a la tarea. Las tareas sin tiempo estimado no generan extra.</p>';
         } else {
             echo '<p style="color:#646970;font-size:13px;margin:0">Sin horas registradas en este periodo.</p>';
         }
@@ -489,8 +589,9 @@ class CMH_Time {
         $today   = current_time( 'Y-m-d' );
 
         // Un vistazo rápido antes de la tabla.
-        $open = $late = $doing = 0;
+        $open = $late = $doing = $over = 0;
         foreach ( $rows as $r ) {
+            if ( self::extra_seconds( $secs[ (int) $r->id ] ?? 0, $r ) ) $over++;
             if ( $r->status === 'completada' ) continue;
             $open++;
             if ( $r->status === 'en_progreso' ) $doing++;
@@ -510,6 +611,9 @@ class CMH_Time {
             . ( $late
                 ? '<strong style="color:#d63638">' . intval( $late ) . ' vencida(s)</strong>'
                 : 'ninguna vencida' )
+            . ' · ' . ( $over
+                ? '<strong style="color:#d63638">' . intval( $over ) . ' pasada(s) del tiempo estimado</strong>'
+                : 'ninguna pasada del tiempo estimado' )
             . ' · usa los filtros de arriba para acotar por técnico o empresa.</p>';
 
         if ( ! $rows ) {
@@ -517,37 +621,52 @@ class CMH_Time {
             return;
         }
 
-        echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr>'
-            . '<th>Tarea</th><th>Máquina</th><th>Técnico</th><th>Vence</th>'
-            . '<th>Estado</th><th class="cmh-num">Horas</th><th></th>'
+        // v2.10 — Anchos fijos (table-layout: fixed en .cmh-team-table): hasta
+        // ahora los botones y los badges, que no se parten, estiraban columnas
+        // y la tabla se salía del panel. Estimado, medido y extra van aparte.
+        echo '<div class="cmh-table-scroll"><table class="widefat cmh cmh-team-table">'
+            . '<colgroup><col class="c-task"><col class="c-machine"><col class="c-tech"><col class="c-due">'
+            . '<col class="c-status"><col class="c-hours"><col class="c-hours"><col class="c-hours"><col class="c-actions"></colgroup>'
+            . '<thead><tr>'
+            . '<th>Tarea</th><th>Máquina</th><th>Técnico</th><th>Vence</th><th>Estado</th>'
+            . '<th class="cmh-num">Estimado</th><th class="cmh-num">Medido</th><th class="cmh-num">Extra</th><th></th>'
             . '</tr></thead><tbody>';
 
         foreach ( $rows as $r ) {
             $late_row = ( ! in_array( $r->status, [ 'completada', 'sin_formato' ], true ) && $r->due_date && $r->due_date < $today );
             $back     = self::page_url( $f );
+            $worked   = $secs[ (int) $r->id ] ?? 0;
+            $extra    = self::extra_seconds( $worked, $r );
+            $est      = self::estimate_label( $r );
 
             echo '<tr>'
                 . '<td><strong>' . esc_html( $r->title ) . '</strong>'
                 . ( ( $r->source ?? '' ) === 'auto' ? ' <span class="cmh-badge cmh-badge-xs" style="background:#e7f0f7;color:#2271b1">Auto</span>' : '' )
                 . '</td>'
-                . '<td class="cmh-nowrap">' . ( $r->machine_id
+                . '<td>' . ( $r->machine_id
                     ? '<a href="' . esc_url( CMH_Admin::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $r->machine_id ] ) ) . '">'
                       . esc_html( $r->machine_code ?: '—' ) . '</a>'
                     : '—' )
                 . ( $r->company_name ? '<br><span class="cmh-muted">' . esc_html( $r->company_name ) . '</span>' : '' ) . '</td>'
                 . '<td>' . esc_html( $r->assigned_to ? self::user_name( $r->assigned_to ) : '— Sin asignar —' ) . '</td>'
-                . '<td class="cmh-nowrap">' . ( $r->due_date
+                . '<td>' . ( $r->due_date
                     ? ( $late_row
                         ? '<span style="color:#d63638;font-weight:600">' . esc_html( $r->due_date ) . '</span>'
                         : esc_html( $r->due_date ) )
                     : '<span class="cmh-muted">—</span>' ) . '</td>'
                 . '<td>' . CMH_Tech::task_status_badge( $r->status )
-                . ( in_array( (int) $r->id, $running, true ) ? ' <span class="cmh-badge cmh-badge-xs" style="background:#e7f0fb;color:#1c4d80">reloj</span>' : '' ) . '</td>'
-                . '<td class="cmh-num">' . esc_html( isset( $secs[ (int) $r->id ] ) ? self::format( $secs[ (int) $r->id ] ) : '—' ) . '</td>'
-                . '<td class="cmh-row-actions">' . CMH_Tech::complete_button( $r, $back ) . '</td>'
+                . ( in_array( (int) $r->id, $running, true ) ? '<br><span class="cmh-badge cmh-badge-xs" style="background:#e7f0fb;color:#1c4d80">reloj corriendo</span>' : '' ) . '</td>'
+                . '<td class="cmh-num">' . ( $est ? esc_html( $est ) : '<span class="cmh-muted">—</span>' ) . '</td>'
+                . '<td class="cmh-num">' . ( $worked ? esc_html( self::format( $worked ) ) : '<span class="cmh-muted">—</span>' ) . '</td>'
+                . '<td class="cmh-num">' . ( $extra
+                    ? '<strong style="color:#d63638">+' . esc_html( self::format( $extra ) ) . '</strong>'
+                    : '<span class="cmh-muted">—</span>' ) . '</td>'
+                . '<td class="cmh-team-actions">' . CMH_Tech::complete_button( $r, $back ) . '</td>'
                 . '</tr>';
         }
         echo '</tbody></table></div>';
+        echo '<p class="cmh-hint" style="margin-top:8px">«Medido» suma los tramos ya cerrados; lo que corre ahora se ve en «En curso ahora». '
+            . 'El tiempo estimado se pone al crear o editar la tarea en la ficha de la máquina.</p>';
 
         if ( count( $rows ) >= 300 )
             echo '<p class="cmh-hint">Se muestran las 300 primeras. Afina los filtros para ver el resto.</p>';

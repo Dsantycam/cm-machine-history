@@ -50,6 +50,8 @@ delete_option( 'cmh_form_urls' );
 delete_option( 'cmh_mtypes' );
 delete_option( 'cmh_pstates' );
 delete_option( 'cmh_systems' );
+// v2.10 — mantenimientos ya anunciados a los clientes.
+delete_option( 'cmh_client_notices' );
 foreach ( [ 215, 225, 226 ] as $cmh_form ) {
     delete_transient( 'cmh_form_url_' . $cmh_form );
 }

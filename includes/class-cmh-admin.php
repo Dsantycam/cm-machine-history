@@ -1604,6 +1604,13 @@ class CMH_Admin {
                 . '</td>'
                 . '</tr>';
 
+            // v2.10 — Qué se hizo y qué se cobra. Abierto al llegar desde «Por cobrar».
+            if ( $editando !== (int) $r->id ) {
+                echo '<tr class="cmh-subrow"><td colspan="9">'
+                    . self::interv_detail_toggle( $r, ( $f['pay'] ?? '' ) === 'pending' )
+                    . '</td></tr>';
+            }
+
             if ( $editando === (int) $r->id ) {
                 echo '<tr class="cmh-edit-row" id="iv-' . intval( $r->id ) . '"><td colspan="9">'
                     . '<p class="cmh-hint" style="margin:0 0 10px">Editando la intervención <strong>#' . intval( $r->id )
@@ -1619,6 +1626,56 @@ class CMH_Admin {
             echo '<p class="cmh-hint">Se muestran las 500 más recientes de este filtro.</p>';
         echo '</div>';   // cierra .cmh-panel; page_footer cierra el .wrap
         self::page_footer();
+    }
+
+    /**
+     * v2.10 — Todo lo registrado en una intervención: datos de la visita en
+     * píldoras (con lo facturado, pagado y el saldo) y, debajo, los trabajos
+     * realizados, repuestos y observaciones completos, sin recortar. Lo usan
+     * la lista del admin y el portal del cliente, para que los dos vean lo
+     * mismo sobre lo que se cobra.
+     */
+    public static function interv_detail_html( $r ) {
+        $cost    = (float) $r->cost;
+        $paid    = (float) $r->paid_amount;
+        $balance = $cost - $paid;
+        $meta = array_filter( [
+            'Técnico: ' . ( $r->technician ?: '—' ),
+            (float) $r->hourmeter    > 0 ? 'Horómetro: ' . number_format( (float) $r->hourmeter, 2, ',', '.' ) . ' h' : '',
+            (float) $r->worked_hours > 0 ? 'Horas trabajadas: ' . ( 0 + $r->worked_hours ) . ' h' : '',
+            'Parada: ' . ( 0 + $r->downtime_hours ) . ' h',
+            $r->failure_system ? 'Sistema / falla: ' . CMH_Taxonomy::systems_label( $r->failure_system ) : '',
+            $cost > 0 ? 'Facturado: ' . CMH_Reports::money( $cost ) : '',
+            $paid > 0 ? 'Pagado: ' . CMH_Reports::money( $paid ) : '',
+        ] );
+
+        $out = '<div class="cmh-meta">';
+        foreach ( $meta as $txt ) $out .= '<span>' . esc_html( $txt ) . '</span>';
+        // Mismo criterio que payment_badge(): solo es saldo si se espera cobrarlo
+        // (no lo anulado, ni lo cotizado, ni lo que no se contabiliza).
+        $status = $r->payment_status ?: self::derive_payment_status( $cost, $paid );
+        if ( $cost > 0 && $balance > 0 && CMH_Taxonomy::pstate_money( $status ) === 'pending' )
+            $out .= '<span class="cmh-meta-due">Saldo: ' . esc_html( CMH_Reports::money( $balance ) ) . '</span>';
+        $out .= '</div>';
+
+        $texts = 0;
+        foreach ( [ 'services' => 'Trabajos realizados', 'parts' => 'Repuestos / insumos', 'observations' => 'Observaciones' ] as $k => $label ) {
+            if ( trim( (string) $r->$k ) === '' ) continue;
+            $texts++;
+            $out .= '<p><strong>' . esc_html( $label ) . ':</strong><br>' . nl2br( esc_html( trim( $r->$k ) ) ) . '</p>';
+        }
+        if ( ! $texts ) {
+            $out .= '<p class="cmh-muted" style="margin:4px 0">No se registró la descripción de los trabajos en esta intervención.</p>';
+        }
+        return $out;
+    }
+
+    /** v2.10 — El detalle de arriba, plegable. $open: abierto de entrada. */
+    public static function interv_detail_toggle( $r, $open = false ) {
+        return '<details class="cmh-interv-detail"' . ( $open ? ' open' : '' ) . '>'
+            . '<summary>Trabajos realizados y detalle</summary>'
+            . self::interv_detail_html( $r )
+            . '</details>';
     }
 
     private static function interv_filter_bar( $f ) {
@@ -3046,10 +3103,7 @@ class CMH_Admin {
                     . '<td>' . esc_html( $tech_name ?: '—' ) . '</td>'
                     . '<td>' . esc_html( $ta->due_date ?: '—' ) . '</td>'
                     . '<td>' . CMH_Tech::task_status_badge( $ta->status ) . '</td>'
-                    . '<td>' . ( in_array( (int) $ta->id, $running_ids, true )
-                        ? '<span class="cmh-badge" style="background:#e7f0fb;color:#1c4d80">En curso</span> '
-                        : '' )
-                        . esc_html( isset( $task_secs[ (int) $ta->id ] ) ? CMH_Time::format( $task_secs[ (int) $ta->id ] ) : '—' ) . '</td>'
+                    . '<td>' . CMH_Time::hours_cell( $ta, $task_secs[ (int) $ta->id ] ?? 0, in_array( (int) $ta->id, $running_ids, true ) ) . '</td>'
                     . '<td>' . CMH_Tech::open_form_control( $ta, $back ) . '</td>'
                     . '<td class="cmh-row-actions">'
                     . CMH_Tech::complete_button( $ta, $back )
@@ -3095,7 +3149,11 @@ class CMH_Admin {
         foreach ( CMH_Tech::technicians() as $u )
             echo '<option value="' . intval( $u->ID ) . '" ' . selected( $is_edit ? $task->assigned_to : 0, $u->ID, false ) . '>' . esc_html( $u->display_name ) . '</option>';
         echo '</select></label>'
-            . '<label>Vence<input type="date" name="due_date" value="' . esc_attr( $is_edit ? ( $task->due_date ?: '' ) : '' ) . '"></label>';
+            . '<label>Vence<input type="date" name="due_date" value="' . esc_attr( $is_edit ? ( $task->due_date ?: '' ) : '' ) . '"></label>'
+            // v2.10 — Contra esto se miden las horas extra del reloj.
+            . '<label>Tiempo estimado <span class="cmh-optional">(horas)</span>'
+            . '<input type="number" name="estimated_hours" min="0" max="9999" step="0.25" placeholder="Ej. 1.5" value="'
+            . esc_attr( $is_edit && (float) ( $task->estimated_hours ?? 0 ) > 0 ? 0 + $task->estimated_hours : '' ) . '"></label>';
 
         // v2.0 — Formato que el técnico debe diligenciar. Opcional: si se deja en
         // «El técnico elige», él escoge cuál al abrir la tarea desde su panel.
@@ -3179,6 +3237,7 @@ class CMH_Admin {
             'due_date'    => sanitize_text_field( $_POST['due_date'] ?? '' ) ?: null,
             'status'      => 'pendiente',
             'form_id'     => self::form_id_from_post(),
+            'estimated_hours' => CMH_Time::estimate_from_post(),
             'created_by'  => get_current_user_id(),
         ] );
         self::redirect_to( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => $machine_id ] ), 'Tarea creada.' );
@@ -3202,6 +3261,7 @@ class CMH_Admin {
             'due_date'    => sanitize_text_field( $_POST['due_date'] ?? '' ) ?: null,
             'status'      => $status,
             'form_id'     => self::form_id_from_post(),
+            'estimated_hours' => CMH_Time::estimate_from_post(),
             'updated_at'  => current_time( 'mysql' ),
         ], [ 'id' => $task_id ] );
 

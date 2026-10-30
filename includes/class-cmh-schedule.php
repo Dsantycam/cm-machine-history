@@ -30,6 +30,9 @@ class CMH_Schedule {
     /** Option donde viven los ajustes del plugin. */
     const OPTION = 'cmh_settings';
 
+    /** v2.10 — Option con lo ya anunciado a los clientes, por máquina. */
+    const NOTICES_OPTION = 'cmh_client_notices';
+
     /** Hora local (0-23) a la que se programa el job diario. */
     const CRON_HOUR = 7;
 
@@ -64,8 +67,15 @@ class CMH_Schedule {
             'alert_to_admin'    => 1,   // correo resumen al admin del sitio
             'alert_emails'      => '',  // destinatarios extra, separados por coma
             'alert_to_techs'    => 1,   // correo individual a cada técnico asignado
+            // v2.10 — Avisos a los clientes. Apagado de fábrica: al actualizar no
+            // sale ningún correo a un cliente hasta que el admin lo encienda.
+            'client_alerts'           => 0, // avisar a los clientes de sus mantenimientos
+            'client_alert_days'       => 7, // anticipación del primer aviso
+            'client_alert_reminder'   => 1, // recordatorio el día anterior
+            'client_alert_reschedule' => 1, // avisar si cambia una fecha ya anunciada
             'auto_task'         => 1,   // auto-generar tarea al vencer el mantenimiento
             'auto_task_title'   => 'Mantenimiento preventivo programado',
+            'auto_task_hours'   => 0,   // v2.10 — tiempo estimado de la tarea automática (0 = sin estimación)
             'auto_task_when'    => 'immediate', // 'immediate' o 'window'
             'auto_complete_task' => 1,  // cerrar la tarea al llegar su intervención
             'time_max_hours'    => 12,  // tope por tramo de trabajo del técnico
@@ -139,8 +149,13 @@ class CMH_Schedule {
      * @return string Fecha calculada 'Y-m-d', o '' si no aplica.
      */
     public static function recalc_next_maintenance( $machine_id, $intervention_date, $maintenance_type, $manual_date = '' ) {
-        if ( $manual_date ) return '';
         if ( sanitize_key( $maintenance_type ) !== 'preventivo' ) return '';
+        if ( $manual_date ) {
+            // v2.10 — Preventivo hecho con la próxima fecha escrita a mano: el
+            // mantenimiento anunciado ya pasó, la fecha nueva no es un «cambio».
+            self::forget_client_notice( $machine_id );
+            return '';
+        }
 
         global $wpdb; $t = CMH_Core::tables();
         $interval = (int) $wpdb->get_var( $wpdb->prepare(
@@ -162,6 +177,7 @@ class CMH_Schedule {
         $base = $intervention_date ?: current_time( 'Y-m-d' );
         $next = date( 'Y-m-d', strtotime( $base . ' +' . $interval . ' days' ) );
 
+        self::forget_client_notice( $machine_id );
         $wpdb->update( $t['machines'],
             [ 'next_maintenance_date' => $next, 'updated_at' => current_time( 'mysql' ) ],
             [ 'id' => (int) $machine_id ]
@@ -173,6 +189,7 @@ class CMH_Schedule {
     /** v2.9 — Quita la fecha de próximo mantenimiento (ya se hizo, y no hay recurrencia). */
     private static function clear_next_maintenance( $machine_id ) {
         global $wpdb; $t = CMH_Core::tables();
+        self::forget_client_notice( $machine_id );
         $wpdb->update( $t['machines'],
             [ 'next_maintenance_date' => null, 'updated_at' => current_time( 'mysql' ) ],
             [ 'id' => (int) $machine_id ]
@@ -215,6 +232,7 @@ class CMH_Schedule {
         }
 
         $next = date( 'Y-m-d', strtotime( ( $done_date ?: current_time( 'Y-m-d' ) ) . ' +' . $interval . ' days' ) );
+        self::forget_client_notice( (int) $m->id );
         $wpdb->update( $t['machines'],
             [ 'next_maintenance_date' => $next, 'updated_at' => current_time( 'mysql' ) ],
             [ 'id' => (int) $m->id ]
@@ -344,7 +362,7 @@ class CMH_Schedule {
 
         // Idempotencia: un solo ciclo por día salvo ejecución manual.
         if ( ! $force && $s['last_run'] && substr( $s['last_run'], 0, 10 ) === $today ) {
-            return [ 'machines' => 0, 'tasks' => 0, 'created' => 0, 'emails' => 0, 'skipped' => true ];
+            return [ 'machines' => 0, 'tasks' => 0, 'created' => 0, 'emails' => 0, 'clients' => 0, 'skipped' => true ];
         }
 
         // v2.1 — Cierra los relojes que quedaron corriendo más allá del tope
@@ -371,16 +389,21 @@ class CMH_Schedule {
             if ( ! empty( $s['alert_to_techs'] ) ) $emails += self::send_tech_digests( $machines, $tasks, $days );
         }
 
+        // v2.10 — Los clientes van aparte: tienen su propia ventana y solo se
+        // les avisa una vez por etapa, así que no dependen de lo de arriba.
+        $client_emails = ( ! empty( $s['alerts_enabled'] ) && ! empty( $s['client_alerts'] ) )
+            ? self::send_client_alerts() : 0;
+
         $summary = sprintf(
-            '%d mantenimiento(s) y %d tarea(s) en ventana de %d días · %d tarea(s) autogenerada(s) · %d correo(s) enviado(s).',
-            count( $machines ), count( $tasks ), $days, $created, $emails
+            '%d mantenimiento(s) y %d tarea(s) en ventana de %d días · %d tarea(s) autogenerada(s) · %d correo(s) enviado(s) · %d aviso(s) a clientes.',
+            count( $machines ), count( $tasks ), $days, $created, $emails, $client_emails
         );
         self::update_settings( [ 'last_run' => current_time( 'mysql' ), 'last_summary' => $summary ] );
         CMH_Core::log( 'info', null, '', null, 'Alertas de mantenimiento: ' . $summary );
 
         return [
             'machines' => count( $machines ), 'tasks' => count( $tasks ),
-            'created'  => $created, 'emails' => $emails, 'skipped' => false,
+            'created'  => $created, 'emails' => $emails, 'clients' => $client_emails, 'skipped' => false,
         ];
     }
 
@@ -489,6 +512,8 @@ class CMH_Schedule {
             'due_date'    => $m->next_maintenance_date,
             'status'      => 'pendiente',
             'source'      => 'auto',
+            // v2.10 — El estimado de Ajustes; se puede cambiar luego en la tarea.
+            'estimated_hours' => (float) self::setting( 'auto_task_hours' ) > 0 ? round( (float) self::setting( 'auto_task_hours' ), 2 ) : null,
             'created_by'  => null,
         ] );
         return ! $wpdb->last_error;
@@ -619,6 +644,226 @@ class CMH_Schedule {
         return $sent;
     }
 
+    // =========================================================================
+    // v2.10 — Avisos a los clientes
+    // =========================================================================
+
+    /*
+     * Hasta la v2.9 el cliente no recibía nada del sistema: solo veía su portal.
+     * Ahora recibe, por cada mantenimiento programado de sus equipos:
+     *   - un AVISO cuando entra en su ventana (client_alert_days),
+     *   - un RECORDATORIO el día anterior (o el mismo día, si el cron llega tarde),
+     *   - un CAMBIO DE FECHA si se mueve una fecha que ya se le había anunciado.
+     * Nunca se le avisa de un vencido: eso es un pendiente nuestro, no suyo.
+     *
+     * Para no repetir, la option NOTICES_OPTION guarda por máquina la fecha
+     * anunciada y las etapas ya enviadas: [ id => [ 'date' => Y-m-d, 'sent' => [] ] ].
+     * Cuando el mantenimiento SE HACE (preventivo registrado, tarea cerrada) la
+     * entrada se borra con forget_client_notice(): la fecha que calcule la
+     * recurrencia es un mantenimiento nuevo, no un «cambio de fecha».
+     */
+
+    private static function client_notices() {
+        $n = get_option( self::NOTICES_OPTION, [] );
+        return is_array( $n ) ? $n : [];
+    }
+
+    /** El mantenimiento anunciado ya se hizo: lo que venga después se anuncia de cero. */
+    public static function forget_client_notice( $machine_id ) {
+        $n = self::client_notices();
+        if ( ! isset( $n[ (int) $machine_id ] ) ) return;
+        unset( $n[ (int) $machine_id ] );
+        update_option( self::NOTICES_OPTION, $n, false );
+    }
+
+    /**
+     * Qué aviso le toca hoy a cada máquina. No guarda nada: lo usan el envío y la
+     * vista previa. $state sale con cómo debe quedar la option si se envía.
+     *
+     * @return array [ machine_id => [ 'm' => fila, 'kind' => notice|reminder|moved, 'from' => Y-m-d ] ]
+     */
+    private static function client_plan( &$state ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $s        = self::settings();
+        $days     = max( 1, (int) $s['client_alert_days'] );
+        $reminder = ! empty( $s['client_alert_reminder'] );
+        $moved_on = ! empty( $s['client_alert_reschedule'] );
+        $today    = current_time( 'Y-m-d' );
+        $limit    = date( 'Y-m-d', strtotime( '+' . $days . ' days', current_time( 'timestamp' ) ) );
+
+        $state = self::client_notices();
+        // Las ya anunciadas se traen aunque su fecha nueva quede fuera de la
+        // ventana: hay que ver si cambió. Los IDs vienen de la option, enteros.
+        $known = array_map( 'intval', array_keys( $state ) );
+        $or    = $known ? ' OR m.id IN (' . implode( ',', $known ) . ')' : '';
+
+        $rows = $wpdb->get_results( $wpdb->prepare(
+            "SELECT m.id, m.machine_code, m.brand, m.model, m.company_id, m.city_id,
+                    m.next_maintenance_date, ci.name city_name
+             FROM {$t['machines']} m
+             JOIN {$t['cities']} ci ON ci.id=m.city_id
+             WHERE m.next_maintenance_date IS NOT NULL
+               AND m.status NOT IN ('inactiva','fuera_servicio')
+               AND ( ( m.next_maintenance_date >= %s AND m.next_maintenance_date <= %s ) $or )
+             ORDER BY m.next_maintenance_date ASC",
+            $today, $limit
+        ), OBJECT_K );
+
+        $plan = [];
+
+        // 1. Lo ya anunciado: ¿sigue igual, cambió o desapareció?
+        foreach ( $state as $id => $st ) {
+            $m = $rows[ $id ] ?? null;
+            if ( ! $m ) { unset( $state[ $id ] ); continue; }   // sin fecha o inactiva: se olvida en silencio
+            if ( $m->next_maintenance_date === ( $st['date'] ?? '' ) ) continue;
+
+            $d = CMH_Metrics::maintenance_days( $m->next_maintenance_date );
+            if ( $d < 0 ) {
+                // Se movió a una fecha ya pasada: no se le avisa al cliente de un vencido.
+                $state[ $id ] = [ 'date' => $m->next_maintenance_date, 'sent' => [ 'notice', 'reminder' ] ];
+            } elseif ( $moved_on ) {
+                $plan[ $id ] = [ 'm' => $m, 'kind' => 'moved', 'from' => $st['date'] ?? '' ];
+                // El correo del cambio ya anuncia la fecha nueva: cuenta como aviso,
+                // aunque falte mucho (solo quedará el recordatorio del día anterior),
+                // y como recordatorio si la fecha nueva es mañana u hoy.
+                $sent = [ 'notice' ];
+                if ( $d <= 1 ) $sent[] = 'reminder';
+                $state[ $id ] = [ 'date' => $m->next_maintenance_date, 'sent' => $sent ];
+            } else {
+                // Sin avisos de cambio: la fecha nueva se anuncia como cualquier otra.
+                $state[ $id ] = [ 'date' => $m->next_maintenance_date, 'sent' => [] ];
+            }
+        }
+
+        // 2. Lo que está en la ventana y aún no tiene su aviso o su recordatorio.
+        foreach ( $rows as $id => $m ) {
+            if ( isset( $plan[ $id ] ) ) continue;
+            $d = CMH_Metrics::maintenance_days( $m->next_maintenance_date );
+            if ( $d < 0 || $d > $days ) continue;
+
+            $st   = $state[ $id ] ?? [ 'date' => $m->next_maintenance_date, 'sent' => [] ];
+            $sent = (array) ( $st['sent'] ?? [] );
+
+            if ( $reminder && $d <= 1 && ! in_array( 'reminder', $sent, true ) ) {
+                $plan[ $id ] = [ 'm' => $m, 'kind' => 'reminder', 'from' => '' ];
+                $sent = [ 'notice', 'reminder' ];
+            } elseif ( ! in_array( 'notice', $sent, true ) ) {
+                $plan[ $id ] = [ 'm' => $m, 'kind' => 'notice', 'from' => '' ];
+                $sent[] = 'notice';
+            } else {
+                continue;
+            }
+            $state[ $id ] = [ 'date' => $m->next_maintenance_date, 'sent' => array_values( array_unique( $sent ) ) ];
+        }
+
+        return $plan;
+    }
+
+    /** Los avisos del plan que caen en el alcance (empresas o sucursales) de un cliente. */
+    private static function client_items( $plan, $user_id ) {
+        $acl = CMH_Client::acl( $user_id );
+        if ( ! $acl['companies'] && ! $acl['cities'] ) return [];
+        return array_values( array_filter( $plan, function ( $it ) use ( $acl ) {
+            return in_array( (int) $it['m']->company_id, $acl['companies'], true )
+                || in_array( (int) $it['m']->city_id,    $acl['cities'],    true );
+        } ) );
+    }
+
+    /**
+     * Un correo por cliente con lo de sus equipos. Las etapas se marcan como
+     * enviadas aunque ningún cliente tenga acceso a la máquina: si se le da
+     * acceso después, no le llega de golpe un aviso viejo.
+     *
+     * @return int Correos enviados.
+     */
+    private static function send_client_alerts() {
+        $state = [];
+        $plan  = self::client_plan( $state );
+        $sent  = 0;
+
+        if ( $plan ) {
+            foreach ( CMH_Client::clients() as $u ) {
+                if ( ! is_email( $u->user_email ) ) continue;
+                $items = self::client_items( $plan, (int) $u->ID );
+                if ( ! $items ) continue;
+                if ( self::send_html( $u->user_email, self::client_subject( $items ), self::client_body( $u, $items ) ) ) $sent++;
+            }
+        }
+
+        update_option( self::NOTICES_OPTION, $state, false );
+        return $sent;
+    }
+
+    private static function client_date( $date ) {
+        return $date ? date_i18n( 'd/m/Y', strtotime( $date ) ) : '—';
+    }
+
+    private static function client_subject( $items ) {
+        $site = get_bloginfo( 'name' );
+        if ( count( $items ) > 1 ) {
+            return sprintf( '[%s] Próximos mantenimientos de tus equipos (%d)', $site, count( $items ) );
+        }
+        $it   = $items[0];
+        $code = $it['m']->machine_code;
+        $date = self::client_date( $it['m']->next_maintenance_date );
+        if ( $it['kind'] === 'moved' ) return sprintf( '[%s] Nueva fecha de mantenimiento para %s: %s', $site, $code, $date );
+        if ( $it['kind'] === 'reminder' ) {
+            $d = CMH_Metrics::maintenance_days( $it['m']->next_maintenance_date );
+            return sprintf( '[%s] %s: mantenimiento de %s', $site, $d === 0 ? 'Hoy' : 'Mañana', $code );
+        }
+        return sprintf( '[%s] Mantenimiento programado para %s el %s', $site, $code, $date );
+    }
+
+    /** Qué pasa con ese mantenimiento, en palabras del cliente. */
+    private static function client_status_html( $it ) {
+        $d = CMH_Metrics::maintenance_days( $it['m']->next_maintenance_date );
+        if ( $it['kind'] === 'moved' ) {
+            return '<strong style="color:#7a4f00">Cambió de fecha</strong>'
+                . '<br><span style="font-size:12px;color:#646970">Antes: ' . esc_html( self::client_date( $it['from'] ) ) . '</span>';
+        }
+        if ( $d === 0 ) return '<strong style="color:#2271b1">Es hoy</strong>';
+        if ( $d === 1 ) return '<strong style="color:#2271b1">Es mañana</strong>';
+        return '<span style="color:#1d2327">En ' . (int) $d . ' días</span>';
+    }
+
+    private static function client_body( $u, $items ) {
+        $body = self::mail_header(
+            'Hola ' . $u->display_name . ',',
+            'Te contamos los próximos mantenimientos programados para tus equipos.'
+        );
+        $body .= '<table style="border-collapse:collapse;width:100%"><thead><tr>'
+            . self::th( 'Equipo' ) . self::th( 'Marca / modelo' ) . self::th( 'Sede' )
+            . self::th( 'Fecha' ) . self::th( 'Aviso' ) . '</tr></thead><tbody>';
+        foreach ( $items as $it ) {
+            $m   = $it['m'];
+            $url = CMH_Admin::admin_url( 'cmh-client', [ 'machine_id' => $m->id ] );
+            $body .= '<tr>'
+                . self::td( '<a href="' . esc_url( $url ) . '" style="color:#2271b1;text-decoration:none"><strong>' . esc_html( $m->machine_code ) . '</strong></a>' )
+                . self::td( esc_html( trim( $m->brand . ' ' . $m->model ) ) )
+                . self::td( esc_html( $m->city_name ), 'font-size:12px;color:#646970' )
+                . self::td( '<strong>' . esc_html( self::client_date( $m->next_maintenance_date ) ) . '</strong>' )
+                . self::td( self::client_status_html( $it ) )
+                . '</tr>';
+        }
+        $body .= '</tbody></table>'
+            . '<p style="margin:18px 0 0">Si necesitas mover alguna de estas fechas, comunícate con nosotros. '
+            . 'En el portal puedes ver la hoja de vida completa de cada equipo.</p>';
+        return $body . self::mail_footer();
+    }
+
+    /** Vista previa para Ajustes: [ [ 'user' => WP_User, 'items' => [...] ] ]. No marca nada. */
+    private static function client_preview() {
+        $state = [];
+        $plan  = self::client_plan( $state );
+        if ( ! $plan ) return [];
+        $out = [];
+        foreach ( CMH_Client::clients() as $u ) {
+            $items = self::client_items( $plan, (int) $u->ID );
+            if ( $items ) $out[] = [ 'user' => $u, 'items' => $items ];
+        }
+        return $out;
+    }
+
     // ── Plantilla de correo ───────────────────────────────────────────────────
 
     private static function mail_header( $title, $intro ) {
@@ -742,7 +987,26 @@ class CMH_Schedule {
             . 'Enviar resumen al correo del administrador <span class="cmh-optional">(' . esc_html( get_option( 'admin_email' ) ) . ')</span></label>'
             . '<label><input type="checkbox" name="alert_to_techs" value="1" ' . checked( $s['alert_to_techs'], 1, false ) . '> '
             . 'Enviar a cada técnico un correo solo con las tareas asignadas a él</label>'
-            . '<p style="font-size:12px;color:#646970;margin:4px 0 0">Los «Correos adicionales» y el del administrador reciben el resumen COMPLETO de todos: no pongas ahí el correo de un técnico.</p>';
+            . '<p style="font-size:12px;color:#646970;margin:4px 0 0">Los «Correos adicionales» y el del administrador reciben el resumen COMPLETO de todos: no pongas ahí el correo de un técnico.</p>'
+
+            // v2.10 — Avisos a los clientes.
+            . '<div class="cmh-form-section">'
+            . '<p class="cmh-form-section-title">Avisos a clientes</p>'
+            . '<label><input type="checkbox" name="client_alerts" value="1" ' . checked( $s['client_alerts'], 1, false ) . '> '
+            . '<strong>Avisar a los clientes de los mantenimientos programados de sus equipos</strong></label>'
+            . '<div class="cmh-form-grid" style="margin-top:8px">'
+            . '<label>Días de anticipación del aviso'
+            . '<input type="number" name="client_alert_days" value="' . esc_attr( max( 1, (int) $s['client_alert_days'] ) ) . '" min="1" max="365" step="1" style="max-width:120px">'
+            . '</label>'
+            . '</div>'
+            . '<label><input type="checkbox" name="client_alert_reminder" value="1" ' . checked( $s['client_alert_reminder'], 1, false ) . '> '
+            . 'Enviar además un recordatorio el día anterior</label>'
+            . '<label><input type="checkbox" name="client_alert_reschedule" value="1" ' . checked( $s['client_alert_reschedule'], 1, false ) . '> '
+            . 'Avisar si cambia la fecha de un mantenimiento que ya se le anunció</label>'
+            . '<p class="cmh-hint">Cada cliente recibe solo los equipos de las empresas o sucursales a las que tiene acceso, en un solo correo al día. '
+            . 'Por cada mantenimiento le llegan como mucho el aviso y el recordatorio; nunca se le avisa de un mantenimiento vencido. '
+            . 'Un cambio de fecha se le comunica en el proceso diario siguiente. Revisa en «Estado y vista previa» qué recibiría cada cliente antes de encenderlo.</p>'
+            . '</div>';
 
         echo '<div class="cmh-form-section">'
             . '<p class="cmh-form-section-title">Tareas automáticas</p>'
@@ -750,6 +1014,10 @@ class CMH_Schedule {
             . 'Crear una tarea automáticamente para cada mantenimiento programado</label>'
             . '<label>Título de la tarea generada'
             . '<input type="text" name="auto_task_title" value="' . esc_attr( $s['auto_task_title'] ) . '" placeholder="Mantenimiento preventivo programado"></label>'
+            . '<label>Tiempo estimado de la tarea generada <span class="cmh-optional">(horas · vacío = sin estimación)</span>'
+            . '<input type="number" name="auto_task_hours" min="0" max="9999" step="0.25" placeholder="Ej. 2" style="max-width:120px" value="'
+            . esc_attr( (float) $s['auto_task_hours'] > 0 ? 0 + $s['auto_task_hours'] : '' ) . '"></label>'
+            . '<p class="cmh-hint">Lo que el reloj mida por encima de esto se cuenta como horas extra en «Equipo técnico». Aplica a las tareas que se creen desde ahora; cada tarea se puede ajustar al editarla.</p>'
             . '<p style="font-size:12px;color:#646970;margin:10px 0 4px"><strong>¿Cuándo se crea?</strong></p>'
             . '<label style="font-weight:400"><input type="radio" name="auto_task_when" value="immediate" '
             . checked( $s['auto_task_when'], 'immediate', false ) . '> '
@@ -776,7 +1044,7 @@ class CMH_Schedule {
             // v2.9.1 — Qué ve el técnico en «Mis Máquinas».
             . '<div class="cmh-form-section">'
             . '<p class="cmh-form-section-title">Qué ve el técnico</p>'
-            . '<p style="font-size:12px;color:#646970;margin:0 0 8px">Lo que aparece en la ficha de cada máquina dentro de «Mis Máquinas». Las tareas, el horómetro y el formulario para registrar intervenciones se ven siempre.</p>'
+            . '<p style="font-size:12px;color:#646970;margin:0 0 8px">Lo que aparece en la ficha de cada máquina dentro de «Mis Máquinas». Las tareas, el horómetro y los formatos para diligenciar se ven siempre.</p>'
             . '<label><input type="checkbox" name="tech_show_costs" value="1" ' . checked( $s['tech_show_costs'], 1, false ) . '> '
             . '<strong>Costos y pagos</strong> <span class="cmh-optional">— costo total, cobrado, por cobrar y el estado de pago de cada intervención</span></label>'
             . '<label><input type="checkbox" name="tech_show_indicators" value="1" ' . checked( $s['tech_show_indicators'], 1, false ) . '> '
@@ -840,6 +1108,33 @@ class CMH_Schedule {
                 . self::tasks_table_html( $tasks, true );
         }
         echo '</div>';
+
+        // v2.10 — Qué recibiría cada cliente hoy. Se calcula aunque los avisos
+        // estén apagados, para poder revisarlo antes de encenderlos.
+        $preview = self::client_preview();
+        echo '<div class="cmh-panel"><h2>Vista previa — avisos a clientes hoy</h2>';
+        if ( empty( $s['client_alerts'] ) ) {
+            echo '<div class="cmh-note" style="margin:0 0 12px">Los avisos a clientes están <strong>apagados</strong>: esto es lo que se enviaría si los enciendes.</div>';
+        }
+        if ( ! $preview ) {
+            echo '<p style="color:#646970;font-size:13px;margin:0">Ningún cliente tiene hoy un aviso pendiente en la ventana de '
+                . intval( max( 1, (int) $s['client_alert_days'] ) ) . ' días.</p>';
+        } else {
+            foreach ( $preview as $p ) {
+                echo '<h3 style="font-size:14px;margin:14px 0 6px">' . esc_html( $p['user']->display_name )
+                    . ' <span style="font-weight:400;color:#646970;font-size:12px">' . esc_html( $p['user']->user_email ) . '</span></h3>'
+                    . '<p style="font-size:12px;color:#646970;margin:0 0 6px">Asunto: ' . esc_html( self::client_subject( $p['items'] ) ) . '</p>'
+                    . '<table class="widefat striped" style="max-width:760px"><thead><tr><th>Equipo</th><th>Sede</th><th>Fecha</th><th>Aviso</th></tr></thead><tbody>';
+                foreach ( $p['items'] as $it ) {
+                    echo '<tr><td><strong>' . esc_html( $it['m']->machine_code ) . '</strong></td>'
+                        . '<td>' . esc_html( $it['m']->city_name ) . '</td>'
+                        . '<td>' . esc_html( self::client_date( $it['m']->next_maintenance_date ) ) . '</td>'
+                        . '<td>' . self::client_status_html( $it ) . '</td></tr>';
+                }
+                echo '</tbody></table>';
+            }
+        }
+        echo '</div>';
         echo '</div></div>';   // cierra el panel y .cmh-tabs-wrapper
 
 
@@ -859,8 +1154,13 @@ class CMH_Schedule {
             'alert_to_admin'    => isset( $_POST['alert_to_admin'] ) ? 1 : 0,
             'alert_emails'      => sanitize_text_field( $_POST['alert_emails'] ?? '' ),
             'alert_to_techs'    => isset( $_POST['alert_to_techs'] ) ? 1 : 0,
-            'auto_task'         => isset( $_POST['auto_task'] ) ? 1 : 0,
+            'client_alerts'           => isset( $_POST['client_alerts'] ) ? 1 : 0,
+            'client_alert_days'       => min( 365, max( 1, (int) ( $_POST['client_alert_days'] ?? 7 ) ) ),
+            'client_alert_reminder'   => isset( $_POST['client_alert_reminder'] ) ? 1 : 0,
+            'client_alert_reschedule' => isset( $_POST['client_alert_reschedule'] ) ? 1 : 0,
+            'auto_task'       => isset( $_POST['auto_task'] ) ? 1 : 0,
             'auto_task_title'   => sanitize_text_field( $_POST['auto_task_title'] ?? '' ) ?: 'Mantenimiento preventivo programado',
+            'auto_task_hours'   => (float) CMH_Time::estimate_from_post( 'auto_task_hours' ),
             'auto_task_when'    => ( ( $_POST['auto_task_when'] ?? '' ) === 'window' ) ? 'window' : 'immediate',
             'auto_complete_task' => isset( $_POST['auto_complete_task'] ) ? 1 : 0,
             'time_max_hours'    => min( 24, max( 1, (int) ( $_POST['time_max_hours'] ?? 12 ) ) ),
@@ -882,8 +1182,8 @@ class CMH_Schedule {
         $r = self::run_daily( true );
 
         $msg = sprintf(
-            'Proceso ejecutado: %d mantenimiento(s) y %d tarea(s) en ventana · %d tarea(s) creada(s) · %d correo(s) enviado(s).',
-            $r['machines'], $r['tasks'], $r['created'], $r['emails']
+            'Proceso ejecutado: %d mantenimiento(s) y %d tarea(s) en ventana · %d tarea(s) creada(s) · %d correo(s) enviado(s) · %d aviso(s) a clientes.',
+            $r['machines'], $r['tasks'], $r['created'], $r['emails'], $r['clients']
         );
         $warn = ( $r['emails'] === 0 && ( $r['machines'] || $r['tasks'] ) && ! self::setting( 'alerts_enabled' ) )
             ? 'Las alertas por correo están desactivadas: no se envió ningún email.' : '';
