@@ -376,6 +376,12 @@
 }
 .cmh-subrow:hover { background: transparent !important; }
 
+/* v2.10 — «Ver detalle» plegable en la lista de intervenciones del cliente. */
+.cmh-interv-detail summary { cursor: pointer; color: var(--cmh-primary); font-weight: 600; padding: 2px 0 6px; }
+.cmh-interv-detail[open] summary { margin-bottom: 6px; }
+.cmh-interv-detail p { margin: 5px 0; font-size: 13px; color: var(--cmh-gray-900); }
+.cmh-meta span.cmh-meta-due { background: #fcf0e3; border-color: #f0c99a; color: #7a4f00; font-weight: 600; }
+
 /* ── Acciones dentro de una celda ─────────────────────────────
    Antes iban con `display:flex` en el <td>, que rompe el alto de la
    fila en algunos navegadores y montaba los botones al estrecharse. */
@@ -386,6 +392,31 @@
 .cmh-row-actions form { display: inline-block; margin: 0; }
 .cmh-row-actions .button { margin: 2px 4px 2px 0; }
 .cmh table td form { margin: 0; }
+
+/* ── v2.10 — «Tareas del equipo» ──────────────────────────────
+   Antes era tabla de ancho automático: los dos botones de acción y los
+   badges (que no se parten) estiraban sus columnas y la tabla se salía
+   del panel. Ahora cada columna tiene su ancho y lo largo se parte DENTRO
+   de la celda; si la pantalla es angosta, la tabla hace scroll. */
+.cmh-table-scroll > table.cmh-team-table { min-width: 1000px; table-layout: fixed; }
+.cmh-team-table col.c-task    { width: 18.5%; }
+.cmh-team-table col.c-machine { width: 11%; }
+.cmh-team-table col.c-tech    { width: 10%; }
+.cmh-team-table col.c-due     { width: 10%; }
+.cmh-team-table col.c-status  { width: 11%; }
+.cmh-team-table col.c-hours   { width: 8.5%; }
+.cmh-team-table col.c-actions { width: 14%; }
+.cmh-team-table td, .cmh-team-table th { overflow-wrap: anywhere; word-break: normal; }
+.cmh-team-table th { white-space: normal; }
+/* «3 h 25 min» cabe en su columna (mín. 85 px): no se parte. */
+.cmh-team-table td.cmh-num, .cmh-team-table th.cmh-num { text-align: right; white-space: nowrap; overflow-wrap: normal; }
+.cmh-team-table .cmh-badge { white-space: normal; text-overflow: clip; line-height: 1.35; }
+.cmh-team-actions form { display: block; margin: 0 0 4px; }
+.cmh-team-actions .button {
+    display: block; width: 100%; box-sizing: border-box;
+    white-space: normal; height: auto; min-height: 26px;
+    line-height: 1.3; padding-top: 3px; padding-bottom: 3px; text-align: center;
+}
 
 /* ── Badges ───────────────────────────────────────────────────
    Un badge nunca debe partirse en dos líneas ni empujar la celda. */

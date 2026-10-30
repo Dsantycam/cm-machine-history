@@ -483,7 +483,12 @@ class CMH_Client {
                 . '<td>' . esc_html( CMH_Reports::money( $r->cost ) ) . '</td>'
                 . '<td>' . ( CMH_Admin::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) ?: '—' ) . '</td>'
                 . '<td>' . ( $r->file_url ? '<a target="_blank" rel="noopener" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>'
-                . '</tr>';
+                . '</tr>'
+                // v2.10 — Lo que se hizo, plegado para que la lista siga siendo una
+                // lista; abierto si se llega desde «Pendiente por pagar».
+                . '<tr class="cmh-subrow"><td colspan="8">'
+                . CMH_Admin::interv_detail_toggle( $r, $f['pay'] === 'pending' )
+                . '</td></tr>';
         }
         echo '</tbody></table></div>';
         if ( count( $rows ) >= 500 ) echo '<p class="cmh-hint">Se muestran las 500 más recientes de este filtro.</p>';
@@ -773,34 +778,59 @@ class CMH_Client {
         CMH_Admin::page_footer();
     }
 
-    /** Intervenciones recientes de la máquina, solo lectura (sin editar/eliminar). */
+    /**
+     * Intervenciones de la máquina, solo lectura (sin editar/eliminar).
+     *
+     * v2.10 — Hasta ahora el cliente veía una tabla corta (fecha, tipo, técnico,
+     * parada, costo) y no sabía QUÉ se le hizo al equipo. Ahora ve las mismas
+     * tarjetas del administrador, con el filtro por tipo, todo lo registrado y
+     * los textos completos. Quedan fuera solo las acciones y el rastro interno
+     * de modificaciones.
+     */
     private static function render_readonly_interventions( $machine_id ) {
-        global $wpdb; $t = CMH_Core::tables();
-        $rows = $wpdb->get_results( $wpdb->prepare(
-            "SELECT i.*, f.file_url FROM {$t['interventions']} i
-             LEFT JOIN {$t['files']} f ON f.intervention_id=i.id
-             WHERE i.machine_id=%d ORDER BY i.intervention_date DESC, i.id DESC LIMIT 30",
-            $machine_id
-        ) );
+        $rows = CMH_Admin::machine_interventions( $machine_id );
         if ( ! $rows ) {
             echo '<p style="color:#646970;font-size:13px;margin:0">Aún no hay intervenciones registradas para este equipo.</p>';
             return;
         }
-        echo '<table class="widefat cmh"><thead><tr>'
-            . '<th>Fecha</th><th>Tipo</th><th>Técnico</th><th>H. parada</th><th>Facturado</th><th>Pago</th><th>PDF</th>'
-            . '</tr></thead><tbody>';
+
+        echo '<div class="cmh-filter-bar">'
+            . '<span class="cmh-filter-label">Filtrar:</span>'
+            . '<button type="button" class="button button-small cmh-tl-filter active" data-filter="">Todas</button>';
+        foreach ( CMH_Taxonomy::mtype_labels() as $mk => $ml )
+            echo '<button type="button" class="button button-small cmh-tl-filter" data-filter="' . esc_attr( $mk ) . '">' . esc_html( $ml ) . '</button>';
+        echo '</div>';
+
+        echo '<div class="cmh-timeline">';
         foreach ( $rows as $r ) {
-            echo '<tr>'
-                . '<td>' . esc_html( $r->intervention_date ) . '</td>'
-                . '<td>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' ) . '</td>'
-                . '<td>' . esc_html( $r->technician ?: '—' ) . '</td>'
-                . '<td>' . esc_html( $r->downtime_hours ) . ' h</td>'
-                . '<td>' . esc_html( CMH_Reports::money( $r->cost ) ) . '</td>'
-                . '<td>' . CMH_Admin::payment_badge( $r->payment_status, $r->cost, $r->paid_amount ) . '</td>'
-                . '<td>' . ( $r->file_url ? '<a target="_blank" href="' . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver</a>' : '—' ) . '</td>'
-                . '</tr>';
+            $mt   = strtolower( $r->maintenance_type ?: '' );
+            $tone = CMH_Taxonomy::COLORS[ CMH_Taxonomy::mtypes()[ $mt ]['color'] ?? 'gray' ] ?? CMH_Taxonomy::COLORS['gray'];
+            $pay  = CMH_Admin::payment_badge( $r->payment_status, $r->cost, $r->paid_amount );
+            echo '<div class="cmh-timeline-item" data-mtype="' . esc_attr( $mt ) . '">'
+                . '<div class="cmh-dot" style="background:' . esc_attr( $tone['fg'] ) . ';box-shadow:0 0 0 4px ' . esc_attr( $tone['bg'] ) . '"></div>'
+                . '<div class="cmh-timeline-card" style="border-left:3px solid ' . esc_attr( $tone['fg'] ) . '">'
+                . '<div class="cmh-timeline-head">'
+                . '<strong>' . self::mtype_badge( $r->maintenance_type ?: $r->form_type, $r->mtto_level ?? '' )
+                . ( $r->affects_availability ? ' <span class="cmh-badge cmh-badge-averia">Afectó la disponibilidad</span>' : '' )
+                . ( $pay ? ' ' . $pay : '' )
+                . '</strong>'
+                . '<time>' . esc_html( $r->intervention_date ) . '</time></div>'
+                . self::interv_detail_html( $r );
+            if ( $r->file_url ) {
+                echo '<div class="cmh-card-actions"><a class="button button-small" target="_blank" rel="noopener" href="'
+                    . esc_url( CMH_Admin::file_link( $r->id ) ) . '">Ver PDF</a></div>';
+            }
+            echo '</div></div>';
         }
-        echo '</tbody></table>';
+        echo '</div>';
+
+        if ( count( $rows ) >= 150 )
+            echo '<p class="cmh-hint">Se muestran las 150 más recientes.</p>';
+    }
+
+    /** v2.10 — Delegado: el admin usa el mismo detalle en su lista de intervenciones. */
+    private static function interv_detail_html( $r ) {
+        return CMH_Admin::interv_detail_html( $r );
     }
 
     /** Tabla de disponibilidad de los últimos 12 meses. */

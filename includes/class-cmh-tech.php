@@ -3,8 +3,9 @@
  * CMH_Tech — v0.9 Panel de técnicos.
  *
  * - Menú propio "Mis Máquinas" (capacidad cmh_tech) con vista reducida: el técnico
- *   solo ve las máquinas que le fueron asignadas, sus tareas y puede registrar
- *   intervenciones sobre ellas. No accede a empresas, ciudades ni métricas globales.
+ *   solo ve las máquinas que le fueron asignadas y sus tareas, y registra las
+ *   intervenciones enviando los formatos de Forminator (v2.10: ya no hay
+ *   formulario manual en el panel). No accede a empresas, ciudades ni métricas globales.
  * - Helpers compartidos de asignaciones (técnico ↔ máquina) y tareas, usados también
  *   por CMH_Admin en el tab "Técnicos" de la hoja de vida.
  *
@@ -37,7 +38,6 @@ class CMH_Tech {
     public static function init() {
         add_action( 'admin_menu', [ __CLASS__, 'admin_menu' ] );
         add_action( 'admin_post_cmh_tech_update_task',   [ __CLASS__, 'tech_update_task' ] );
-        add_action( 'admin_post_cmh_tech_save_intervention', [ __CLASS__, 'tech_save_intervention' ] );
         add_action( 'admin_post_cmh_open_task_form',     [ __CLASS__, 'open_task_form' ] );
         add_action( 'admin_post_cmh_complete_task',      [ __CLASS__, 'complete_task' ] );
     }
@@ -449,7 +449,9 @@ class CMH_Tech {
             echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr><th>Tarea</th><th>Máquina</th><th>Vence</th><th>Estado</th><th>Formato</th><th></th></tr></thead><tbody>';
             foreach ( $tasks as $ta ) {
                 echo '<tr>'
-                    . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 20 ) ) . '</span>' : '' ) . '</td>'
+                    . '<td><strong>' . esc_html( $ta->title ) . '</strong>'
+                    . ( CMH_Time::estimate_label( $ta ) ? ' <span class="cmh-badge cmh-badge-xs" style="background:#f0f0f1;color:#50575e">Estimado: ' . esc_html( CMH_Time::estimate_label( $ta ) ) . '</span>' : '' )
+                    . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( wp_trim_words( $ta->notes, 20 ) ) . '</span>' : '' ) . '</td>'
                     . '<td>' . esc_html( $ta->machine_code ) . '</td>'
                     . '<td>' . self::due_label( $ta->due_date, $ta->status ) . '</td>'
                     . '<td>' . self::task_status_badge( $ta->status ) . '</td>'
@@ -572,11 +574,14 @@ class CMH_Tech {
         echo '</div><div class="cmh-side">';
 
         // v2.0 — Formatos de esta máquina, prellenados, sin depender de una tarea.
-        self::render_form_links( $m->machine_code );
-
-        echo '<div class="cmh-panel"><h2>Registrar intervención</h2>';
-        self::tech_intervention_form( $machine_id, (float) $m->current_hourmeter );
-        echo '</div></div></div>';
+        // v2.10 — Son la ÚNICA vía del técnico: se quitó el formulario manual
+        // «Registrar intervención» del panel. Registrar a mano queda para el admin.
+        if ( ! self::render_form_links( $m->machine_code ) ) {
+            echo '<div class="cmh-panel"><h2>Diligenciar formato</h2>'
+                . '<p style="font-size:13px;color:#646970;margin:0">Las intervenciones se registran con los formatos, y aún no hay ninguno configurado. '
+                . 'Pídele al administrador que los vincule.</p></div>';
+        }
+        echo '</div></div>';
 
         CMH_Admin::page_footer();
     }
@@ -595,12 +600,13 @@ class CMH_Tech {
             $links[] = '<a class="button" style="width:100%;text-align:center;margin-bottom:6px" target="_blank" rel="noopener" href="'
                 . esc_url( $url ) . '">' . esc_html( $label ) . '</a>';
         }
-        if ( ! $links ) return;
+        if ( ! $links ) return false;
 
         echo '<div class="cmh-panel"><h2>Diligenciar formato</h2>'
             . '<p style="font-size:12px;color:#646970;margin:-6px 0 10px">Se abre en una pestaña nueva con los datos de <strong>'
             . esc_html( $machine_code ) . '</strong> ya cargados.</p>'
             . implode( '', $links ) . '</div>';
+        return true;
     }
 
     /** Tareas de la máquina, con controles de estado para el técnico. */
@@ -614,7 +620,10 @@ class CMH_Tech {
         echo '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr><th>Tarea</th><th>Vence</th><th>Estado</th><th>Formato</th><th>Cambiar estado</th></tr></thead><tbody>';
         foreach ( $tasks as $ta ) {
             echo '<tr>'
-                . '<td><strong>' . esc_html( $ta->title ) . '</strong>' . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( $ta->notes ) . '</span>' : '' ) . '</td>'
+                . '<td><strong>' . esc_html( $ta->title ) . '</strong>'
+                // v2.10 — El técnico ve cuánto se estimó; las horas medidas siguen siendo solo del admin.
+                . ( CMH_Time::estimate_label( $ta ) ? ' <span class="cmh-badge cmh-badge-xs" style="background:#f0f0f1;color:#50575e">Estimado: ' . esc_html( CMH_Time::estimate_label( $ta ) ) . '</span>' : '' )
+                . ( $ta->notes ? '<br><span style="font-size:12px;color:#646970">' . esc_html( $ta->notes ) . '</span>' : '' ) . '</td>'
                 . '<td>' . self::due_label( $ta->due_date, $ta->status ) . '</td>'
                 . '<td>' . self::task_status_badge( $ta->status ) . '</td>'
                 . '<td>' . self::open_form_control( $ta, $back ) . '</td>'
@@ -642,7 +651,7 @@ class CMH_Tech {
             $machine_id
         ) );
         if ( ! $rows ) {
-            echo '<p style="color:#646970;font-size:13px;margin:0">Aún no hay intervenciones. Registra la primera en el formulario de la derecha.</p>';
+            echo '<p style="color:#646970;font-size:13px;margin:0">Aún no hay intervenciones. Se registran al enviar un formato de la derecha.</p>';
             return;
         }
         // v2.9.1 — Las columnas opcionales dependen de «Qué ve el técnico».
@@ -676,45 +685,6 @@ class CMH_Tech {
                 . '</tr>';
         }
         echo '</tbody></table></div>';
-    }
-
-    /** Formulario de intervención simplificado para el técnico. */
-    private static function tech_intervention_form( $machine_id, $last_hourmeter = 0 ) {
-        static $systems = [ 'frenos' => 'Frenos', 'potencia' => 'Potencia', 'traccion' => 'Tracción', 'seguridad' => 'Seguridad', 'encendido' => 'Encendido', 'refrigeracion' => 'Refrigeración', 'mastil' => 'Mástil', 'direccion' => 'Dirección', 'combustible' => 'Combustible', 'hidraulico' => 'Sist. Hidráulico', 'electronico' => 'Electrónico', 'otro' => 'Otro' ];
-        $me = wp_get_current_user();
-
-        echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">'
-            . '<input type="hidden" name="action" value="cmh_tech_save_intervention">'
-            . '<input type="hidden" name="machine_id" value="' . intval( $machine_id ) . '">'
-            . wp_nonce_field( 'cmh_action', '_wpnonce', true, false );
-
-        echo '<label>Fecha <em>*</em></label><input type="date" name="intervention_date" value="' . esc_attr( current_time( 'Y-m-d' ) ) . '" required>'
-            . '<label>Tipo <em>*</em></label><select name="maintenance_type">'
-            . '<option value="preventivo">Preventivo</option>'
-            . '<option value="correctivo">Correctivo</option>'
-            . '<option value="averia">Avería</option>'
-            . '<option value="evaluacion">Evaluación</option>'
-            . '</select>'
-            . '<label>Técnico</label><input name="technician" value="' . esc_attr( $me->display_name ) . '">'
-            . CMH_Admin::mlevel_field()
-            . '<label>Horómetro</label><input type="number" step="0.01" name="hourmeter" min="0" id="cmh-hourmeter-input" data-last-hourmeter="' . esc_attr( $last_hourmeter ) . '">'
-            . '<div id="cmh-hourmeter-warn" class="cmh-field-warning" style="display:none"></div>';
-
-        echo '<div class="cmh-form-section"><p class="cmh-form-section-title">Falla / Parada</p>'
-            . '<label>Sistema / Falla <span class="cmh-optional">(puedes marcar varios)</span></label>'
-            . '<span class="cmh-checklist">';
-        foreach ( $systems as $k => $v )
-            echo '<label class="cmh-inline-check"><input type="checkbox" name="failure_system[]" value="' . esc_attr( $k ) . '"> ' . esc_html( $v ) . '</label>';
-        echo '</span>'
-            . '<label>Horas parada <span class="cmh-optional">(averías)</span></label>'
-            . '<input type="number" step="0.01" name="downtime_hours" value="0" min="0"></div>';
-
-        echo '<div class="cmh-form-section"><p class="cmh-form-section-title">Detalle</p>'
-            . '<label>Horas trabajadas</label><input type="number" step="0.01" name="worked_hours" value="0" min="0">'
-            . '<label>Repuestos / insumos</label><textarea name="parts"></textarea>'
-            . '<label>Servicios prestados</label><textarea name="services"></textarea>'
-            . '<label>Observaciones</label><textarea name="observations"></textarea></div>'
-            . '<button class="button button-primary">Guardar intervención</button></form>';
     }
 
     private static function due_label( $due_date, $status = '' ) {
@@ -761,56 +731,6 @@ class CMH_Tech {
         CMH_Admin::redirect_to(
             CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => (int) $task->machine_id ] ),
             'Tarea actualizada.'
-        );
-    }
-
-    public static function tech_save_intervention() {
-        self::tech_check();
-        global $wpdb; $t = CMH_Core::tables();
-        $machine_id = intval( $_POST['machine_id'] );
-        if ( ! self::can_access_machine( $machine_id ) ) wp_die( 'No tienes acceso a esta máquina.' );
-        if ( ! $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['machines']} WHERE id=%d", $machine_id ) ) )
-            wp_die( 'Máquina no encontrada.' );
-
-        $mtype     = sanitize_text_field( $_POST['maintenance_type'] );
-        $hourmeter = floatval( $_POST['hourmeter'] );
-        $prev_hm   = (float) $wpdb->get_var( $wpdb->prepare( "SELECT current_hourmeter FROM {$t['machines']} WHERE id=%d", $machine_id ) );
-
-        $hm_warn = '';
-        if ( $hourmeter > 0 && $prev_hm > 0 && $hourmeter < $prev_hm )
-            $hm_warn = sprintf( 'Horómetro ingresado (%.2f h) es menor al registrado anteriormente (%.2f h).', $hourmeter, $prev_hm );
-
-        $wpdb->insert( $t['interventions'], [
-            'machine_id'           => $machine_id, 'forminator_form_id' => null,
-            'intervention_date'    => sanitize_text_field( $_POST['intervention_date'] ),
-            'form_type'            => 'manual',
-            'maintenance_type'     => $mtype,
-            'technician'           => sanitize_text_field( $_POST['technician'] ),
-            'hourmeter'            => $hourmeter,
-            'worked_hours'         => floatval( $_POST['worked_hours'] ),
-            'downtime_hours'       => floatval( $_POST['downtime_hours'] ),
-            'cost'                 => 0,
-            'affects_availability' => CMH_Metrics::auto_affects_availability( $mtype, 0 ),
-            'failure_system'       => CMH_Taxonomy::systems_to_string( (array) ( $_POST['failure_system'] ?? [] ) ),
-            'mtto_level'           => CMH_Admin::mlevel_from_post(),
-            'parts'                => sanitize_textarea_field( $_POST['parts'] ),
-            'services'             => sanitize_textarea_field( $_POST['services'] ),
-            'observations'         => sanitize_textarea_field( $_POST['observations'] ),
-        ] );
-
-        if ( $hourmeter > 0 && $hourmeter >= $prev_hm )
-            $wpdb->update( $t['machines'], [ 'current_hourmeter' => $hourmeter, 'updated_at' => current_time( 'mysql' ) ], [ 'id' => $machine_id ] );
-
-        // v0.11 — Recurrencia: un preventivo reprograma solo la próxima fecha.
-        $msg  = 'Intervención registrada.';
-        $auto = CMH_Schedule::recalc_next_maintenance(
-            $machine_id, sanitize_text_field( $_POST['intervention_date'] ), $mtype
-        );
-        if ( $auto ) $msg .= ' Próximo mantenimiento: ' . $auto . '.';
-
-        CMH_Admin::redirect_to(
-            CMH_Admin::admin_url( 'cmh-tech', [ 'machine_id' => $machine_id ] ),
-            $msg, $hm_warn
         );
     }
 }

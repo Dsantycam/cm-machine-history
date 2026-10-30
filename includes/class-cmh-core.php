@@ -207,6 +207,7 @@ class CMH_Core {
             status      VARCHAR(40)     NOT NULL DEFAULT 'pendiente',
             source      VARCHAR(20)     NOT NULL DEFAULT 'manual',
             form_id     BIGINT UNSIGNED NULL,
+            estimated_hours DECIMAL(6,2) NULL,
             created_by  BIGINT UNSIGNED NULL,
             created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at  DATETIME        NULL,
@@ -483,6 +484,13 @@ class CMH_Core {
         $colf = $wpdb->get_row( "SHOW COLUMNS FROM {$t['tasks']} LIKE 'form_id'" );
         if ( ! $colf ) {
             $wpdb->query( "ALTER TABLE {$t['tasks']} ADD COLUMN form_id BIGINT UNSIGNED NULL DEFAULT NULL AFTER source" );
+        }
+
+        // v2.10 — Tiempo estimado de la tarea, para medir las horas extra contra
+        // lo que marca el reloj. NULL = sin estimación (no se calcula extra).
+        $cole = $wpdb->get_row( "SHOW COLUMNS FROM {$t['tasks']} LIKE 'estimated_hours'" );
+        if ( ! $cole ) {
+            $wpdb->query( "ALTER TABLE {$t['tasks']} ADD COLUMN estimated_hours DECIMAL(6,2) NULL DEFAULT NULL AFTER form_id" );
         }
 
         // v2.5 — payment_status nació como VARCHAR(20), cuando los tres estados
