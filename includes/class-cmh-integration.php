@@ -6,10 +6,15 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class CMH_Integration {
 
+    /** v2.10.1 — Segundos tras el envío en que se reintenta encontrar el PDF. */
+    const PDF_RETRIES = [ 90, 300, 900, 3600, 21600 ];
+
     public static function init() {
         add_action( 'forminator_form_after_handle_submit', [ __CLASS__, 'capture_submit' ],    10, 10 );
         add_action( 'forminator_form_after_save_entry',    [ __CLASS__, 'capture_submit' ],    10, 10 );
-        add_action( 'cmh_find_e2pdf_pdf_event',            [ __CLASS__, 'find_pdf' ],          10, 4  );
+        // v2.10.1 — 6 argumentos (remisión y número de intento). Los eventos que
+        // quedaron programados por versiones anteriores, con 4, siguen valiendo.
+        add_action( 'cmh_find_e2pdf_pdf_event',            [ __CLASS__, 'find_pdf' ],          10, 6  );
         add_action( 'wp_enqueue_scripts',                  [ __CLASS__, 'enqueue_frontend' ] );
     }
 
@@ -41,6 +46,10 @@ class CMH_Integration {
             'prefill'     => $machine_code ? CMH_Forms::resolve_prefill( $machine_code, $task_id ) : [],
             // Para el aviso verde bajo el campo: lo mismo que ve un visitante.
             'machine'     => $machine_code ? CMH_Admin::machine_summary( $machine_code ) : null,
+            // v2.10.1 — La tarea que se abrió: el JS la mete en el envío como
+            // `cmh_task` (fuera de los campos de Forminator, así no toca `hidden-1`
+            // ni el nombre del PDF) para cerrar ESA tarea y no adivinarla.
+            'task'        => $task_id,
         ] );
     }
 
@@ -194,7 +203,26 @@ class CMH_Integration {
         if ( isset( $processed[ $key ] ) ) return;
         $processed[ $key ] = true;
 
-        self::process_entry( $form_id, $data );
+        self::process_entry( $form_id, $data, self::submitted_task_id(), get_current_user_id() );
+    }
+
+    /**
+     * v2.10.1 — La tarea desde la que se abrió el formato, si la hay.
+     *
+     * 1. El input `cmh_task` que mete frontend.js en el formulario.
+     * 2. Si no llegó (JS bloqueado, formulario pintado tarde), la URL de la
+     *    página del formato: el envío AJAX la trae como referer con ?cmh_task=.
+     */
+    private static function submitted_task_id() {
+        $id = (int) ( $_POST['cmh_task'] ?? 0 );
+        if ( $id > 0 ) return $id;
+
+        $ref = wp_get_referer() ?: (string) ( $_POST['_wp_http_referer'] ?? '' );
+        if ( ! $ref ) return 0;
+        $query = (string) wp_parse_url( $ref, PHP_URL_QUERY );
+        if ( $query === '' ) return 0;
+        parse_str( $query, $q );
+        return max( 0, (int) ( $q['cmh_task'] ?? 0 ) );
     }
 
     /** Llave única del envío, usada para deduplicar dentro y entre peticiones. */
@@ -302,6 +330,9 @@ class CMH_Integration {
             'cost'              => $cost,
             'paid_amount'       => $paid,
             'payment_status'    => $pay_status,
+            // v2.10.1 — Va al principio del nombre del PDF (savename «{hidden-1}{máquina}»):
+            // con ella se busca el archivo por nombre exacto.
+            'remission'         => $rem,
             'warnings'          => $warnings,
         ];
     }
@@ -310,46 +341,68 @@ class CMH_Integration {
     /**
      * v2.3 — Cierra la tarea que este envío da por hecha.
      *
-     * Se elige por deducción, porque el formato no puede cargar el número de
-     * tarea sin romper el nombre del PDF de E2PDF:
-     *   1. Solo se miran tareas EN CURSO de esa máquina. Una tarea pendiente que
-     *      nadie abrió no se cierra sola: no hay señal de que sea esta.
-     *   2. Si hay varias, gana la del técnico que firma el formulario; si no se
-     *      reconoce el nombre, la más antigua.
-     *   3. Si no hay ninguna en curso, no se toca nada.
+     * Hasta la v2.10 se elegía solo por deducción (el número de tarea no viajaba
+     * con el envío): tareas EN CURSO de la máquina, la del técnico que firma o la
+     * más antigua; una pendiente nunca se cerraba.
      *
      * v2.9 — También cuentan las «Completadas sin formato»: justamente están
      * esperando este envío para cerrarse. Van primero, porque son las que ya
      * se dieron por hechas.
      *
-     * Se puede apagar desde «Máquinas → Ajustes».
+     * v2.10.1 — Hasta aquí, una tarea que seguía «Pendiente» nunca se cerraba, y
+     * seguía pendiente cada vez que el formato se abría sin pasar por «Abrir
+     * formato» del técnico asignado (enlaces «Diligenciar formato», tareas sin
+     * asignar, otro técnico). Ahora, en orden:
+     *   1. Si el envío trae el número de tarea ($task_id) y es de esta máquina,
+     *      se cierra esa, esté pendiente, en curso o sin formato.
+     *   2. Si no, la deducción de siempre (en curso / sin formato), prefiriendo
+     *      la del usuario que envía y luego la del nombre que firma.
+     *   3. Si no hay ninguna en curso, la PENDIENTE de esta máquina asignada al
+     *      técnico que envía (la de fecha más cercana): él mismo diligenció el
+     *      formato de su máquina, que es la señal que antes faltaba.
      *
+     * @param int $task_id Tarea explícita del envío, o 0.
+     * @param int $user_id Usuario que envía, o 0 (reproceso desde los logs).
      * @return int  ID de la tarea cerrada, o 0.
      */
-    public static function close_task_for_machine( $machine_id, $technician_name = '' ) {
+    public static function close_task_for_machine( $machine_id, $technician_name = '', $task_id = 0, $user_id = 0 ) {
         global $wpdb; $t = CMH_Core::tables();
 
         if ( class_exists( 'CMH_Schedule' ) && ! CMH_Schedule::setting( 'auto_complete_task' ) ) return 0;
 
-        $tasks = $wpdb->get_results( $wpdb->prepare(
-            "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND status IN ('sin_formato','en_progreso')
-             ORDER BY FIELD(status,'sin_formato','en_progreso'), id ASC",
-            (int) $machine_id
-        ) );
-        if ( ! $tasks ) return 0;
+        // Un administrador que envía para probar no es «el técnico que envía».
+        $user_id = ( $user_id && user_can( $user_id, 'cmh_tech' ) ) ? (int) $user_id : 0;
 
-        $chosen = $tasks[0];
-        if ( count( $tasks ) > 1 && $technician_name !== '' ) {
-            $needle = self::norm( $technician_name );
-            foreach ( $tasks as $ta ) {
-                if ( ! $ta->assigned_to ) continue;
-                $name = self::norm( get_the_author_meta( 'display_name', (int) $ta->assigned_to ) );
-                if ( $name !== '' && ( $name === $needle || strpos( $needle, $name ) !== false || strpos( $name, $needle ) !== false ) ) {
-                    $chosen = $ta;
-                    break;
-                }
-            }
+        $chosen = null;
+
+        // 1. La tarea exacta desde la que se abrió el formato.
+        if ( $task_id ) {
+            $chosen = $wpdb->get_row( $wpdb->prepare(
+                "SELECT * FROM {$t['tasks']} WHERE id=%d AND machine_id=%d AND status<>'completada'",
+                (int) $task_id, (int) $machine_id
+            ) );
         }
+
+        // 2. Deducción entre las tareas en curso de la máquina.
+        if ( ! $chosen ) {
+            $tasks = $wpdb->get_results( $wpdb->prepare(
+                "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND status IN ('sin_formato','en_progreso')
+                 ORDER BY FIELD(status,'sin_formato','en_progreso'), id ASC",
+                (int) $machine_id
+            ) );
+            if ( $tasks ) $chosen = self::pick_task( $tasks, $technician_name, $user_id );
+        }
+
+        // 3. La pendiente del técnico que envía, en esta máquina.
+        if ( ! $chosen && $user_id ) {
+            $chosen = $wpdb->get_row( $wpdb->prepare(
+                "SELECT * FROM {$t['tasks']} WHERE machine_id=%d AND status='pendiente' AND assigned_to=%d
+                 ORDER BY due_date IS NULL, ABS(DATEDIFF(due_date, %s)), id ASC LIMIT 1",
+                (int) $machine_id, $user_id, current_time( 'Y-m-d' )
+            ) );
+        }
+
+        if ( ! $chosen ) return 0;
 
         // Si ya estaba «sin formato», el trabajo terminó cuando la marcaron así:
         // se conserva esa fecha para que el cumplimiento no la cuente tarde
@@ -362,6 +415,26 @@ class CMH_Integration {
         if ( class_exists( 'CMH_Time' ) ) CMH_Time::on_status_change( $chosen, 'completada', 0 );
 
         return (int) $chosen->id;
+    }
+
+    /**
+     * Entre varias tareas en curso de la misma máquina: primero la asignada al
+     * usuario que envía; luego la del nombre que firma (exacto, ya normalizado);
+     * si nada coincide, la primera (sin formato antes que en curso, la más antigua).
+     */
+    private static function pick_task( $tasks, $technician_name, $user_id ) {
+        if ( $user_id ) {
+            foreach ( $tasks as $ta ) if ( (int) $ta->assigned_to === $user_id ) return $ta;
+        }
+        if ( count( $tasks ) > 1 && $technician_name !== '' ) {
+            // Nombre exacto: con «contiene», «Ana» le ganaba la tarea a «Juana».
+            $needle = self::norm( $technician_name );
+            foreach ( $tasks as $ta ) {
+                if ( ! $ta->assigned_to ) continue;
+                if ( self::norm( get_the_author_meta( 'display_name', (int) $ta->assigned_to ) ) === $needle ) return $ta;
+            }
+        }
+        return $tasks[0];
     }
 
     // =========================================================================
@@ -529,9 +602,12 @@ class CMH_Integration {
      * del PDF. Separado de capture_submit() para que el reproceso desde los logs
      * pueda reutilizarlo tal cual.
      *
+     * @param int $task_id v2.10.1 — tarea desde la que se abrió el formato (0 = no se sabe).
+     * @param int $user_id v2.10.1 — usuario que envía (0 en el reproceso desde los logs).
+     * @param int $submitted_at v2.10.1 — epoch del envío original (reproceso); 0 = ahora.
      * @return array ['created'=>bool, 'intervention_id'=>int, 'message'=>string]
      */
-    public static function process_entry( $form_id, $data ) {
+    public static function process_entry( $form_id, $data, $task_id = 0, $user_id = 0, $submitted_at = 0 ) {
         global $wpdb; $t = CMH_Core::tables();
 
         $cfg = CMH_Forms::get( $form_id );
@@ -614,10 +690,10 @@ class CMH_Integration {
         }
 
         // v2.3 — La tarea se da por terminada al llegar su intervención.
-        // El formato NO puede llevar el número de tarea: E2PDF usa `hidden-1` para
-        // el nombre del PDF y tocarlo rompería la asociación del archivo. Así que
-        // se cierra por deducción: la tarea EN CURSO de esa máquina.
-        $closed = self::close_task_for_machine( (int) $machine->id, $p['technician'] ?? '' );
+        // v2.10.1 — Si el formato se abrió desde una tarea, llega su número (input
+        // `cmh_task`, fuera de los campos: `hidden-1` sigue intacto para E2PDF) y se
+        // cierra ESA. Si no, se deduce por máquina y por quién envía.
+        $closed = self::close_task_for_machine( (int) $machine->id, $p['technician'] ?? '', $task_id, $user_id );
         if ( $closed ) {
             CMH_Core::log( 'info', $form_id, $machine_code, $intervention_id,
                 'Tarea #' . $closed . ' marcada como completada por este envío.', [] );
@@ -625,16 +701,20 @@ class CMH_Integration {
 
         // Epoch real del envío (no la fecha de la BD): así la ventana de búsqueda es
         // inmune a la zona horaria de MySQL y coincide con el mtime real de los archivos.
-        $submitted = time();
-        self::find_pdf( $intervention_id, (int) $machine->id, $machine_code, $submitted );
+        // v2.10.1 — En el reproceso desde los logs llega la hora del envío ORIGINAL:
+        // con time() el PDF real (de hace días) quedaba fuera de la búsqueda.
+        $submitted = $submitted_at > 0 ? (int) $submitted_at : time();
+        $remission = (string) ( $p['remission'] ?? '' );
+        self::find_pdf( $intervention_id, (int) $machine->id, $machine_code, $submitted, $remission, 0 );
 
         // Reintentos escalonados: E2PDF puede generar el PDF con retraso y, en sitios
-        // de bajo tráfico, WP-Cron dispara tarde. Programamos varios intentos para que
-        // el PDF quede asociado aunque aparezca minutos después (aplica a todo tipo de
-        // intervención, no solo averías).
-        foreach ( [ 90, 300, 900 ] as $delay ) {
+        // de bajo tráfico, WP-Cron dispara tarde.
+        // v2.10.1 — Cada intento lleva su número en los argumentos: WordPress
+        // descarta un evento idéntico a otro que esté a menos de 10 minutos, así
+        // que el de 300 s nunca corría. Y se alarga hasta 6 h.
+        foreach ( self::PDF_RETRIES as $n => $delay ) {
             wp_schedule_single_event( time() + $delay, 'cmh_find_e2pdf_pdf_event',
-                [ $intervention_id, (int) $machine->id, $machine_code, $submitted ] );
+                [ $intervention_id, (int) $machine->id, $machine_code, $submitted, $remission, $n + 1 ] );
         }
 
         return [ 'created' => true, 'intervention_id' => $intervention_id, 'message' => '' ];
@@ -644,7 +724,14 @@ class CMH_Integration {
     // E2PDF — búsqueda y asociación de PDF
     // -------------------------------------------------------------------------
 
-    public static function find_pdf( $intervention_id, $machine_id, $machine_code, $submitted = 0 ) {
+    /**
+     * Busca el PDF de E2PDF de una intervención y lo copia a la carpeta del plugin.
+     *
+     * @param int    $submitted Epoch del envío (0 = llamada manual sin hora conocida).
+     * @param string $remission v2.10.1 — remisión del envío: primera parte del nombre del PDF.
+     * @param int    $attempt   v2.10.1 — 0 = al enviar, 1..N = reintento del cron, -1 = manual.
+     */
+    public static function find_pdf( $intervention_id, $machine_id, $machine_code, $submitted = 0, $remission = '', $attempt = -1 ) {
         global $wpdb;
         $t = CMH_Core::tables();
 
@@ -663,14 +750,31 @@ class CMH_Integration {
             return;
         }
 
-        $candidate = self::latest_pdf( $base, $machine_code, (int) $submitted );
+        // v2.10.1 — Un PDF que ya es de OTRA intervención de esta máquina no se
+        // vuelve a asociar. Se compara el CONTENIDO (huella md5), no el nombre:
+        // E2PDF puede repetir el nombre y sobrescribir el archivo, y entonces el
+        // mismo nombre es un PDF nuevo y legítimo.
+        $taken = [];
+        foreach ( $wpdb->get_col( $wpdb->prepare(
+            "SELECT file_path FROM {$t['files']} WHERE machine_id=%d AND intervention_id<>%d",
+            (int) $machine_id, (int) $intervention_id
+        ) ) as $p ) {
+            if ( $p && is_file( $p ) && is_readable( $p ) ) $taken[ md5_file( $p ) ] = true;
+        }
+
+        $candidate = self::latest_pdf( $base, $machine_code, (int) $submitted, (string) $remission, $taken );
         if ( ! $candidate ) {
-            CMH_Core::log( 'warning', null, $machine_code, $intervention_id,
-                'PDF de E2PDF aún no disponible. Se reintentará automáticamente.', [] );
+            $last = (int) $attempt >= count( self::PDF_RETRIES );
+            CMH_Core::log( $last ? 'error' : 'warning', null, $machine_code, $intervention_id,
+                $last
+                    ? 'No apareció el PDF de E2PDF tras todos los reintentos. Revisa que el [e2pdf-save] del formato guarde en uploads/e2pdf con savename «{remisión}{campo de máquina}», o anéxalo a mano.'
+                    : ( (int) $attempt >= 0 ? 'PDF de E2PDF aún no disponible. Se reintentará automáticamente.' : 'No se encontró un PDF con el nombre de esta intervención.' ),
+                [] );
             return;
         }
 
         // Copiar el PDF a nuestro propio directorio para que persista aunque E2PDF lo elimine
+        self::protect_storage();
         $safe_code  = sanitize_file_name( $machine_code );
         $our_dir    = $upload['basedir'] . '/cm-machine-history/' . $safe_code;
         $our_url    = $upload['baseurl'] . '/cm-machine-history/' . $safe_code;
@@ -679,25 +783,26 @@ class CMH_Integration {
 
         if ( ! is_dir( $our_dir ) ) wp_mkdir_p( $our_dir );
         if ( is_dir( $our_dir ) ) {
-            // v2.9 — Si ya había un archivo con ese nombre, antes NO se copiaba y
-            // la intervención quedaba apuntando a uploads/e2pdf, que E2PDF protege
-            // con .htaccess: de ahí los «403 Forbidden» al pulsar «Ver PDF». Ahora
-            // se reutiliza si es el mismo archivo, o se guarda con otro nombre.
-            $name = basename( $candidate );
+            // v2.10.1 — Una copia PROPIA por intervención, con su número delante.
+            // Hasta aquí la copia llevaba el nombre del archivo de E2PDF y, si ya
+            // existía uno igual del mismo tamaño, se reutilizaba (y antes de la
+            // v2.9 se apuntaba al de E2PDF, que este sobrescribe). Cuando E2PDF
+            // repite el nombre, todas las intervenciones acababan en el MISMO
+            // archivo: la hoja de vida mostraba el mismo formato en todas.
+            $name = 'iv' . (int) $intervention_id . '-' . basename( $candidate );
             $dst  = $our_dir . '/' . $name;
-            if ( file_exists( $dst ) && filesize( $dst ) !== filesize( $candidate ) ) {
-                $name = wp_unique_filename( $our_dir, $name );
-                $dst  = $our_dir . '/' . $name;
-            }
-            if ( file_exists( $dst ) || copy( $candidate, $dst ) ) {
+            if ( copy( $candidate, $dst ) ) {
                 $store_path = $dst;
                 $store_url  = esc_url_raw( set_url_scheme( $our_url . '/' . rawurlencode( $name ) ) );
             }
         }
 
+        // Sin copia propia no se asocia: apuntar al archivo de E2PDF es justo lo
+        // que hacía que varias intervenciones compartieran el mismo PDF.
         if ( ! $store_url ) {
-            $rel       = str_replace( $upload['basedir'], '', $candidate );
-            $store_url = esc_url_raw( set_url_scheme( trailingslashit( $upload['baseurl'] ) . ltrim( str_replace( DIRECTORY_SEPARATOR, '/', $rel ), '/' ) ) );
+            CMH_Core::log( 'error', null, $machine_code, $intervention_id,
+                'Se encontró el PDF pero no se pudo copiar a uploads/cm-machine-history. Revisa los permisos de esa carpeta.', [] );
+            return;
         }
 
         $file_data = [
@@ -723,33 +828,44 @@ class CMH_Integration {
     /**
      * Busca el PDF de E2PDF que corresponde a la intervención en uploads/e2pdf.
      *
-     * Estrategia en dos niveles para no asociar el PDF de otra máquina:
-     *  1. Coincidencia por código de máquina normalizado (sin espacios ni signos): es la
-     *     señal fuerte; se acepta a cualquier hora ≥ la del envío (los reintentos tardíos
-     *     siguen valiendo). Gana el más reciente.
-     *  2. Si ninguno coincide por código, cae al PDF más reciente pero solo dentro de una
-     *     ventana acotada tras el envío (evita robar el PDF de un envío posterior).
+     * v2.10.1 — Reescrita. Hasta aquí, si el PDF propio aún no estaba en disco,
+     * se tomaba «el más reciente» de CUALQUIER máquina generado en los 30 min
+     * siguientes: así una intervención se quedaba con el PDF de otro cliente.
+     * Además el código se buscaba como subcadena de la ruta entera («No. 1»
+     * casaba con «No. 10») y ganaba el más NUEVO, no el del envío. Ahora:
      *
-     * Trabaja con el epoch real del envío (`$submitted`), no con la fecha de la BD, para
-     * ser inmune a la zona horaria de MySQL: `getMTime()` también es epoch real.
+     *  - Solo se mira el NOMBRE del archivo, nunca la carpeta.
+     *  - El código de máquina tiene que aparecer completo: no puede seguirle
+     *    otra letra o número («No. 1» ya no casa con «No. 10»).
+     *  - Con remisión (savename «{hidden-1}{máquina}»): lo que va antes del código
+     *    debe ser EXACTAMENTE la remisión. Es la coincidencia buena.
+     *  - Sin coincidencia exacta, se admite solo el código, y solo de esta
+     *    máquina. Nunca un archivo sin el código.
+     *  - Gana el MÁS CERCANO después del envío, no el más nuevo.
+     *  - Los PDF cuyo contenido ya es de otra intervención ($taken) no cuentan.
+     *
+     * Trabaja con el epoch real del envío (`$submitted`), no con la fecha de la BD,
+     * para ser inmune a la zona horaria de MySQL: `getMTime()` también es epoch real.
      *
      * @param string $base         Carpeta uploads/e2pdf.
      * @param string $machine_code Código de máquina (ej. "APC BOG TY No. 001").
-     * @param int    $submitted    Epoch (time()) del envío. 0 → llamada manual: exige
-     *                             coincidencia por código y mira hasta 30 días atrás.
+     * @param int    $submitted    Epoch del envío. 0 → sin hora conocida: 30 días atrás.
+     * @param string $remission    Remisión del envío ('' si el formato no la tiene).
+     * @param array  $taken        Huellas md5 => true de los PDF ya asociados a otra intervención.
      */
-    private static function latest_pdf( $base, $machine_code, $submitted = 0 ) {
-        $norm_code = self::norm_code( $machine_code );
+    private static function latest_pdf( $base, $machine_code, $submitted = 0, $remission = '', $taken = [] ) {
+        $code_re = self::code_regex( $machine_code );
+        if ( ! $code_re ) return null;
+
+        $rem = self::norm_code( $remission );
         $now = time();
-        if ( $submitted > $now ) $submitted = 0; // defensa: nunca un envío en el futuro
+        if ( $submitted > $now ) $submitted = $now; // defensa: nunca un envío en el futuro
 
-        // Cota inferior para considerar archivos (con 2 min de holgura por desfase de reloj).
+        // Cota inferior (2 min de holgura por desfase de reloj).
         $min_mtime = $submitted ? ( $submitted - 120 ) : ( $now - 30 * DAY_IN_SECONDS );
-        // Ventana del respaldo sin código: solo cuando conocemos la hora del envío.
-        $fallback_max = $submitted ? ( $submitted + 1800 ) : 0;
 
-        $best_code = null; $best_code_m = -1; // mejor coincidencia por código
-        $best_any  = null; $best_any_m  = -1; // mejor respaldo por fecha
+        $exact = null; $exact_m = PHP_INT_MAX; // remisión + código
+        $code  = null; $code_m  = PHP_INT_MAX; // solo el código
 
         try {
             $it = new RecursiveIteratorIterator(
@@ -761,17 +877,94 @@ class CMH_Integration {
                 $mtime = $file->getMTime();
                 if ( $mtime < $min_mtime ) continue;
 
+                $name = strtolower( remove_accents( pathinfo( $file->getFilename(), PATHINFO_FILENAME ) ) );
+                if ( ! preg_match( $code_re, $name, $m, PREG_OFFSET_CAPTURE ) ) continue;
+
                 $path = $file->getPathname();
-                if ( $norm_code && strpos( self::norm_code( $path ), $norm_code ) !== false ) {
-                    if ( $mtime > $best_code_m ) { $best_code_m = $mtime; $best_code = $path; }
-                } elseif ( $fallback_max && $mtime <= $fallback_max && $mtime > $best_any_m ) {
-                    $best_any_m = $mtime; $best_any = $path;
+                // El mismo contenido ya está en otra intervención: no es de esta.
+                if ( $taken && isset( $taken[ md5_file( $path ) ] ) ) continue;
+                if ( $rem !== '' && self::norm_code( substr( $name, 0, $m[0][1] ) ) === $rem ) {
+                    if ( $mtime < $exact_m ) { $exact_m = $mtime; $exact = $path; }
+                } elseif ( $mtime < $code_m ) {
+                    $code_m = $mtime; $code = $path;
                 }
             }
         } catch ( Exception $e ) {
             return null;
         }
-        return $best_code ?: $best_any;
+        if ( $exact ) return $exact;
+
+        // Con remisión conocida, un archivo con OTRA remisión delante es de otro
+        // envío: solo se acepta el de solo código si no lleva remisión distinta,
+        // es decir, si el nombre empieza por el código.
+        if ( $code && $rem !== '' ) {
+            $name = strtolower( remove_accents( pathinfo( $code, PATHINFO_FILENAME ) ) );
+            preg_match( $code_re, $name, $m, PREG_OFFSET_CAPTURE );
+            if ( self::norm_code( substr( $name, 0, $m[0][1] ) ) !== '' ) return null;
+        }
+        return $code;
+    }
+
+    /**
+     * v2.10.1 — Patrón del código de máquina dentro de un nombre de archivo, en
+     * minúsculas: sus partes en orden, con o sin separadores entre ellas, sin una
+     * letra justo antes y sin letra ni número justo después. La remisión numérica
+     * pegada delante («12345APC BOG…») sigue valiendo.
+     */
+    private static function code_regex( $machine_code ) {
+        $parts = preg_split( '/[^a-z0-9]+/', strtolower( remove_accents( (string) $machine_code ) ), -1, PREG_SPLIT_NO_EMPTY );
+        if ( ! $parts ) return '';
+        $parts = array_map( function ( $p ) { return preg_quote( $p, '/' ); }, $parts );
+        return '/(?<![a-z])' . implode( '[^a-z0-9]*', $parts ) . '(?![a-z0-9])/';
+    }
+
+    /** v2.10.1 — ¿El nombre de este archivo lleva el código de esa máquina? (revisión de PDFs) */
+    public static function file_matches_machine( $file_name, $machine_code ) {
+        $re = self::code_regex( $machine_code );
+        return $re && preg_match( $re, strtolower( remove_accents( pathinfo( (string) $file_name, PATHINFO_FILENAME ) ) ) );
+    }
+
+    /**
+     * v2.10.1 — La carpeta de copias (uploads/cm-machine-history) no se sirve
+     * directo: los PDF se abren solo por el plugin (CMH_Admin::serve_file), que
+     * comprueba quién puede ver cada máquina. Sin esto, cualquiera que adivinara
+     * la URL (los códigos son predecibles) bajaba el PDF sin iniciar sesión.
+     * Apache respeta el .htaccess; en nginx hay que bloquear la ruta en el servidor.
+     */
+    public static function protect_storage() {
+        $dir = trailingslashit( wp_upload_dir()['basedir'] ) . 'cm-machine-history';
+        if ( ! is_dir( $dir ) ) wp_mkdir_p( $dir );
+        if ( ! is_dir( $dir ) ) return;
+        if ( ! file_exists( $dir . '/.htaccess' ) ) {
+            @file_put_contents( $dir . '/.htaccess',
+                "# CM Machine History: los archivos se abren solo a través del plugin.\n"
+                . "<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n"
+                . "<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n" );
+        }
+        if ( ! file_exists( $dir . '/index.php' ) ) @file_put_contents( $dir . '/index.php', "<?php // Silence is golden.\n" );
+    }
+
+    /**
+     * v2.10.1 — Búsqueda manual («Buscar PDF», y el rescate al abrir un archivo
+     * que ya no está): usa la remisión y la fecha de la propia intervención, para
+     * no traerse el PDF de otra más nueva de la misma máquina.
+     */
+    public static function find_pdf_for_intervention( $intervention_id ) {
+        global $wpdb; $t = CMH_Core::tables();
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT i.id, i.machine_id, i.observations, i.created_at, m.machine_code
+             FROM {$t['interventions']} i JOIN {$t['machines']} m ON m.id=i.machine_id WHERE i.id=%d",
+            (int) $intervention_id
+        ) );
+        if ( ! $row ) return false;
+
+        $remission = preg_match( '/Remisi[oó]n:\s*(.+)\s*$/mu', (string) $row->observations, $mm ) ? trim( $mm[1] ) : '';
+        // created_at lo pone MySQL y su zona horaria no se conoce: 12 h de margen.
+        $created   = $row->created_at ? strtotime( $row->created_at ) : 0;
+        $submitted = $created ? $created - 12 * HOUR_IN_SECONDS : 0;
+
+        self::find_pdf( (int) $row->id, (int) $row->machine_id, $row->machine_code, $submitted, $remission, -1 );
+        return true;
     }
 
     /** Normaliza a minúsculas alfanuméricas (sin espacios, acentos ni signos) para comparar códigos con nombres de archivo. */

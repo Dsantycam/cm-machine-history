@@ -33,6 +33,7 @@ class CMH_Admin {
         add_action( 'admin_post_cm_edit_intervention', [ __CLASS__, 'edit_intervention' ] );
         add_action( 'admin_post_cm_schedule_maintenance', [ __CLASS__, 'schedule_maintenance' ] );
         add_action( 'admin_post_cm_find_pdf',          [ __CLASS__, 'find_pdf_now' ] );
+        add_action( 'admin_post_cm_unlink_file',       [ __CLASS__, 'unlink_file' ] );
         add_action( 'admin_post_cmh_file',             [ __CLASS__, 'serve_file' ] );
         add_action( 'admin_post_cm_update_company',    [ __CLASS__, 'update_company' ] );
         add_action( 'admin_post_cm_update_city',       [ __CLASS__, 'update_city' ] );
@@ -2130,6 +2131,99 @@ class CMH_Admin {
     // Integración
     // =========================================================================
 
+    /**
+     * v2.10.1 — Revisión de los PDF asociados solos (uploaded_by = 0).
+     *
+     * Hasta la v2.10.0 la búsqueda podía quedarse con el PDF de otra máquina (y
+     * de otro cliente). El arreglo evita casos nuevos, pero lo ya asociado sigue
+     * ahí: esta lista marca lo sospechoso para revisarlo y desvincularlo.
+     *   - El nombre del archivo no lleva el código de la máquina.
+     *   - El mismo archivo está en más de una intervención.
+     * Los anexados a mano no se revisan: los eligió una persona.
+     */
+    private static function render_pdf_audit() {
+        global $wpdb; $t = CMH_Core::tables();
+        $rows = $wpdb->get_results(
+            "SELECT f.id, f.file_name, f.file_path, f.file_url, f.intervention_id, f.machine_id, m.machine_code,
+                    c.name AS company_name, i.intervention_date
+             FROM {$t['files']} f
+             JOIN {$t['machines']} m ON m.id = f.machine_id
+             LEFT JOIN {$t['companies']} c ON c.id = m.company_id
+             LEFT JOIN {$t['interventions']} i ON i.id = f.intervention_id
+             WHERE f.uploaded_by = 0 AND f.intervention_id IS NOT NULL
+             ORDER BY f.id DESC"
+        );
+
+        // Mismo archivo físico o mismo contenido en varias intervenciones: es lo
+        // que hacía que una máquina mostrara «el mismo formato» en todas desde
+        // cierta fecha (E2PDF repetía el nombre y la copia se reutilizaba).
+        $by_path = $by_hash = [];
+        foreach ( $rows as $r ) {
+            $disk    = self::file_disk_path( $r );
+            $r->path = $disk ? strtolower( $disk ) : '';
+            $r->hash = $disk ? md5_file( $disk ) : '';
+            if ( $r->path ) $by_path[ $r->path ] = ( $by_path[ $r->path ] ?? 0 ) + 1;
+            if ( $r->hash ) $by_hash[ $r->hash ] = ( $by_hash[ $r->hash ] ?? 0 ) + 1;
+        }
+
+        $bad = [];
+        foreach ( $rows as $r ) {
+            $why = [];
+            if ( ! CMH_Integration::file_matches_machine( $r->file_name, $r->machine_code ) )
+                $why[] = 'el nombre no lleva el código de esta máquina';
+            if ( $r->path && $by_path[ $r->path ] > 1 )
+                $why[] = 'varias intervenciones apuntan al MISMO archivo';
+            elseif ( $r->hash && $by_hash[ $r->hash ] > 1 )
+                $why[] = 'otra intervención tiene un PDF idéntico';
+            if ( $why ) { $r->why = $why; $bad[] = $r; }
+        }
+
+        echo '<div class="cmh-panel" id="cmh-pdf-audit"><h2>Revisión de PDF asociados</h2>';
+        if ( ! $bad ) {
+            echo '<p style="margin:0;color:#646970;font-size:13px">Revisados ' . intval( count( $rows ) )
+                . ' PDF asociados automáticamente: ninguno parece ser de otra máquina.</p></div>';
+            return;
+        }
+        echo '<div class="cmh-note" style="margin:0 0 12px">Hasta la v2.10.0 la búsqueda automática podía quedarse con el PDF de <strong>otra máquina</strong>, '
+            . 'o dejar varias intervenciones de una máquina con <strong>el mismo PDF</strong>. '
+            . 'Abre cada uno: si no corresponde, pulsa <strong>Desvincular</strong> (no borra el archivo, solo lo quita de la intervención) y luego «Buscar PDF» en la máquina. '
+            . 'Si el PDF correcto ya no existe en el servidor, anéxalo a mano desde el que llegó por correo.</div>'
+            . '<div class="cmh-table-scroll"><table class="widefat cmh"><thead><tr>'
+            . '<th>Máquina</th><th>Intervención</th><th>Archivo</th><th>Por qué</th><th></th></tr></thead><tbody>';
+        foreach ( $bad as $r ) {
+            echo '<tr>'
+                . '<td><a href="' . esc_url( self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $r->machine_id ] ) ) . '">'
+                . esc_html( $r->machine_code ) . '</a>'
+                . ( $r->company_name ? '<br><span class="cmh-muted">' . esc_html( $r->company_name ) . '</span>' : '' ) . '</td>'
+                . '<td>#' . intval( $r->intervention_id ) . ( $r->intervention_date ? '<br><span class="cmh-muted">' . esc_html( $r->intervention_date ) . '</span>' : '' ) . '</td>'
+                . '<td style="font-size:12px">' . esc_html( $r->file_name ) . '</td>'
+                . '<td style="font-size:12px;color:#d63638">' . esc_html( implode( '; ', $r->why ) ) . '</td>'
+                . '<td class="cmh-row-actions">'
+                . '<a class="button button-small" target="_blank" rel="noopener" href="' . esc_url( self::file_link( 0, (int) $r->id ) ) . '">Ver</a>'
+                . '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" onsubmit="return confirm(\'¿Quitar este PDF de la intervención? El archivo no se borra.\')">'
+                . '<input type="hidden" name="action" value="cm_unlink_file">'
+                . '<input type="hidden" name="file_id" value="' . intval( $r->id ) . '">'
+                . '<input type="hidden" name="_wpnonce" value="' . wp_create_nonce( 'cmh_action' ) . '">'
+                . '<button class="button button-small" style="color:#d63638;border-color:#d63638">Desvincular</button></form>'
+                . '</td></tr>';
+        }
+        echo '</tbody></table></div></div>';
+    }
+
+    /** v2.10.1 — Quita un archivo de su intervención (la fila), sin borrar el archivo del disco. */
+    public static function unlink_file() {
+        self::check(); global $wpdb; $t = CMH_Core::tables();
+        $id = intval( $_POST['file_id'] ?? 0 );
+        $f  = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['files']} WHERE id=%d", $id ) );
+        if ( ! $f ) wp_die( 'Archivo no encontrado.' );
+        $wpdb->delete( $t['files'], [ 'id' => $id ] );
+        $code = $wpdb->get_var( $wpdb->prepare( "SELECT machine_code FROM {$t['machines']} WHERE id=%d", (int) $f->machine_id ) );
+        CMH_Core::log( 'info', null, (string) $code, $f->intervention_id ? (int) $f->intervention_id : null,
+            'PDF desvinculado a mano desde la revisión: ' . $f->file_name, [] );
+        self::redirect_to( self::admin_url( CMH_SLUG . '-integration' ) . '#cmh-pdf-audit',
+            'PDF desvinculado de la intervención #' . intval( $f->intervention_id ) . '. Ahora puedes usar «Buscar PDF» en la máquina.' );
+    }
+
     public static function page_integration() {
         global $wpdb; $t = CMH_Core::tables();
         self::page_header( 'Integración Forminator / E2PDF', [ [ 'label' => 'Integración' ] ] );
@@ -2147,7 +2241,10 @@ class CMH_Admin {
                     ? '<span class="cmh-badge cmh-status-activa">Activo</span>'
                     : '<span class="cmh-badge" style="background:#f0f0f1;color:#3c434a">Inactivo</span>' ) . '</td></tr>';
         }
-        echo '</tbody></table><p style="font-size:12px;color:#646970;margin-top:10px">Forminator captura los envíos, crea la intervención y E2PDF asocia el PDF generado. Si el PDF no aparece de inmediato, WP-Cron lo reintenta 90 s después.</p></div>';
+        echo '</tbody></table><p style="font-size:12px;color:#646970;margin-top:10px">Forminator captura los envíos, crea la intervención y E2PDF asocia el PDF generado. '
+            . 'El PDF se busca por su nombre (remisión + código de máquina); si no aparece de inmediato, WP-Cron lo reintenta a los 1,5, 5, 15, 60 minutos y 6 horas.</p></div>';
+
+        self::render_pdf_audit();
 
         // Las ediciones a mano se guardan en la misma tabla pero NO son eventos de
         // integración: su sitio es la línea de tiempo de la máquina.
@@ -2384,6 +2481,7 @@ class CMH_Admin {
         // ahora entraba TAL CUAL en la ruta: un código con «../» escribía fuera
         // de la carpeta de subidas. Se reduce a un nombre de carpeta seguro.
         $carpeta = self::safe_folder( $m->machine_code ) ?: ( 'maquina-' . $machine_id );
+        CMH_Integration::protect_storage();   // v2.10.1 — sin acceso directo por URL
 
         $dir_filter = static function ( $dirs ) use ( $carpeta ) {
             $dirs['subdir'] = '/cm-machine-history/' . $carpeta;
@@ -2661,9 +2759,11 @@ class CMH_Admin {
         ) );
         if ( ! $row ) wp_die( 'Intervención no encontrada.' );
 
-        CMH_Integration::find_pdf( $id, (int) $row->machine_id, $row->machine_code );
+        // v2.10.1 — Con la remisión y la fecha de ESTA intervención: antes miraba
+        // 30 días atrás y se quedaba con el PDF más nuevo de la máquina.
+        CMH_Integration::find_pdf_for_intervention( $id );
 
-        $has = (bool) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['files']} WHERE intervention_id=%d LIMIT 1", $id ) );
+        $has =(bool) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$t['files']} WHERE intervention_id=%d LIMIT 1", $id ) );
         $back = self::admin_url( CMH_SLUG . '-machines', [ 'machine_id' => (int) $row->machine_id ] );
         if ( $has ) self::redirect_to( $back, 'PDF asociado a la intervención #' . $id . '.' );
         else        self::redirect_to( $back, '', 'No se encontró un PDF de E2PDF para asociar. Puedes subirlo manualmente con "Anexar PDF / archivo".' );
@@ -2721,13 +2821,13 @@ class CMH_Admin {
         $path = self::file_disk_path( $f );
 
         // El PDF quedó en la carpeta de E2PDF y ya no está: se intenta rescatarlo.
-        if ( ! $path && $f->intervention_id ) {
-            $code = $wpdb->get_var( $wpdb->prepare( "SELECT machine_code FROM {$t['machines']} WHERE id=%d", (int) $f->machine_id ) );
-            if ( $code ) {
-                CMH_Integration::find_pdf( (int) $f->intervention_id, (int) $f->machine_id, $code );
-                $f    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['files']} WHERE id=%d", (int) $f->id ) );
-                $path = $f ? self::file_disk_path( $f ) : '';
-            }
+        // v2.10.1 — Con la remisión y la fecha de la intervención (antes: el PDF más
+        // nuevo de la máquina en 30 días), y solo si quien abre es del equipo: un
+        // cliente o un técnico no re-asocian archivos solo por pulsar «Ver».
+        if ( ! $path && $f->intervention_id && current_user_can( 'edit_others_posts' ) ) {
+            CMH_Integration::find_pdf_for_intervention( (int) $f->intervention_id );
+            $f    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$t['files']} WHERE id=%d", (int) $f->id ) );
+            $path = $f ? self::file_disk_path( $f ) : '';
         }
 
         if ( ! $path ) {

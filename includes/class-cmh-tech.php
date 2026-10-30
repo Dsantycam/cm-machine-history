@@ -288,12 +288,17 @@ class CMH_Tech {
                 . '» no tiene página configurada. Un administrador debe indicarla en Máquinas → Ajustes.' );
         }
 
-        if ( $task->status === 'pendiente' && (int) $task->assigned_to === get_current_user_id() ) {
-            $wpdb->update( $t['tasks'],
-                [ 'status' => 'en_progreso', 'updated_at' => current_time( 'mysql' ) ],
-                [ 'id' => (int) $task->id ]
-            );
-            CMH_Time::on_status_change( $task, 'en_progreso', get_current_user_id() );
+        // v2.10.1 — Una tarea SIN ASIGNAR que abre un técnico también arranca, y
+        // queda a su nombre: antes seguía «Pendiente», sin reloj y sin dueño.
+        $uid        = get_current_user_id();
+        $is_tech    = current_user_can( 'cmh_tech' );
+        $mine       = (int) $task->assigned_to === $uid;
+        $unassigned = ! $task->assigned_to && $is_tech;
+        if ( $task->status === 'pendiente' && ( $mine || $unassigned ) ) {
+            $upd = [ 'status' => 'en_progreso', 'updated_at' => current_time( 'mysql' ) ];
+            if ( $unassigned ) { $upd['assigned_to'] = $uid; $task->assigned_to = $uid; }
+            $wpdb->update( $t['tasks'], $upd, [ 'id' => (int) $task->id ] );
+            CMH_Time::on_status_change( $task, 'en_progreso', $uid );
         }
 
         wp_safe_redirect( $url );

@@ -1379,7 +1379,11 @@ class CMH_Forms {
             CMH_Admin::redirect_to( CMH_Admin::admin_url( CMH_SLUG . '-integration' ), '', 'El formulario ' . $form_id . ' ya no está vinculado.' );
         }
 
-        $result = CMH_Integration::process_entry( $form_id, $data );
+        // v2.10.1 — Con la hora del envío original: con la de ahora, el PDF real
+        // (de hace días) quedaba fuera de la búsqueda. created_at lo pone MySQL y su
+        // zona horaria no se conoce: 12 h de margen (la remisión decide el archivo).
+        $orig   = $log->created_at ? (int) strtotime( $log->created_at ) - 12 * HOUR_IN_SECONDS : 0;
+        $result = CMH_Integration::process_entry( $form_id, $data, 0, 0, max( 0, $orig ) );
         $msg    = $result['created']
             ? 'Envío reprocesado: intervención #' . $result['intervention_id'] . ' creada.'
             : '';

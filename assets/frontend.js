@@ -215,6 +215,32 @@
         }, 400);
     }
 
+    /**
+     * v2.10.1 — Mete el número de tarea en cada formato de Forminator como un
+     * input oculto propio (`cmh_task`), fuera de los campos del formulario: viaja
+     * con el envío AJAX y el servidor cierra exactamente esa tarea. Devuelve true
+     * cuando ya hay al menos un formulario con el input.
+     */
+    function attachTask(taskId) {
+        var $forms = $('form.forminator-custom-form');
+        $forms.each(function () {
+            var $f = $(this);
+            if (!$f.find('input[name="cmh_task"]').length) {
+                $('<input type="hidden" name="cmh_task">').val(taskId).appendTo($f);
+            }
+        });
+        return $forms.length > 0;
+    }
+
+    function attachTaskWhenReady(taskId) {
+        if (attachTask(taskId)) return;
+        var tries = 0;
+        var timer = setInterval(function () {
+            tries++;
+            if (attachTask(taskId) || tries >= 25) clearInterval(timer);  // ~10 s
+        }, 400);
+    }
+
     $(function () {
         Object.keys(fieldMap).forEach(function (fieldName) {
             $('[name="' + fieldName + '"]').each(function () {
@@ -224,6 +250,9 @@
 
         var code = $.trim(queryParam('cmh_machine')).toUpperCase();
         if (code) prefillWhenReady(code);
+
+        var task = parseInt(CMHFront.task || queryParam('cmh_task'), 10);
+        if (task > 0) attachTaskWhenReady(task);
     });
 
 })(jQuery);
